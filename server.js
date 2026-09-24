@@ -4,25 +4,68 @@ const app = express();
 
 app.use(express.json());
 
+const {
+  SHOPIFY_API_KEY,
+  SHOPIFY_API_SECRET,
+  SHOPIFY_STORE,
+  VERIFY_TOKEN
+} = process.env;
+
 // Main App Route
 app.get('/', (req, res) => {
   res.send('WhatsApp Order Automation is Active!');
 });
 
-// 1. Meta Webhook Verification (GET Route)
+// STEP A: Start OAuth - Shopify se auth shuru karna
+app.get('/auth', (req, res) => {
+  const scopes = 'read_orders,write_orders,read_customers,read_products,read_fulfillments,write_fulfillments';
+  const redirectUri = `https://${req.get('host')}/auth/callback`;
+  const installUrl = `https://${SHOPIFY_STORE}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${scopes}&redirect_uri=${redirectUri}`;
+  res.redirect(installUrl);
+});
+
+// STEP B: Callback - yaha token milega
+app.get('/auth/callback', async (req, res) => {
+  const { code } = req.query;
+
+  if (!code) {
+    return res.status(400).send('Missing code');
+  }
+
+  try {
+    const tokenResponse = await axios.post(`https://${SHOPIFY_STORE}/admin/oauth/access_token`, {
+      client_id: SHOPIFY_API_KEY,
+      client_secret: SHOPIFY_API_SECRET,
+      code: code
+    });
+
+    const accessToken = tokenResponse.data.access_token;
+
+    console.log('=================================');
+    console.log('ACCESS TOKEN:', accessToken);
+    console.log('=================================');
+
+    res.send(`App installed successfully! Access Token: ${accessToken} (isko copy karke apne pass safe rakh lein)`);
+  } catch (error) {
+    console.error('OAuth Error:', error.response ? error.response.data : error.message);
+    res.status(500).send('OAuth failed: ' + (error.response ? JSON.stringify(error.response.data) : error.message));
+  }
+});
+
+// Meta Webhook Verification (GET Route)
 app.get('/api/webhooks', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  if (mode === 'subscribe' && token === process.env.VERIFY_TOKEN) {
+  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
     console.log('Meta Webhook Verified Successfully!');
     return res.status(200).send(challenge);
   }
   return res.sendStatus(403);
 });
 
-// 2. Shopify Webhook Endpoint (Order Creation - POST Route)
+// Shopify Webhook Endpoint (Order Creation - POST Route)
 app.post('/api/webhooks', async (req, res) => {
   try {
     const order = req.body;
