@@ -1,0 +1,41 @@
+const express = require('express');
+const axios = require('axios');
+const app = express();
+
+app.use(express.json());
+
+// Main App Route
+app.get('/', (req, res) => {
+  res.send('WhatsApp Order Automation is Active!');
+});
+
+// Shopify Webhook Endpoint (Order Creation)
+app.post('/api/webhooks/orders-create', async (req, res) => {
+  try {
+    const order = req.body;
+    const customerPhone = order.phone || (order.shipping_address && order.shipping_address.phone);
+    const customerName = order.customer ? order.customer.first_name : 'Customer';
+    const orderId = order.name;
+    const totalPrice = order.total_price;
+
+    console.log(`New Order Received: ${orderId} for ${customerName}`);
+
+    if (customerPhone) {
+      await sendWhatsAppMessage(customerPhone, customerName, orderId, totalPrice);
+    }
+
+    res.status(200).send('Webhook Processed');
+  } catch (error) {
+    console.error('Webhook Error:', error.message);
+    res.status(500).send('Error');
+  }
+});
+
+async function sendWhatsAppMessage(phone, name, orderId, amount) {
+  console.log(`Sending WhatsApp message to ${phone}: Hello ${name}, order ${orderId} worth Rs.${amount} confirmed!`);
+}
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
