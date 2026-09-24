@@ -9,8 +9,8 @@ app.get('/', (req, res) => {
   res.send('WhatsApp Order Automation is Active!');
 });
 
-// 1. Meta Webhook Verification (GET Route) - YE NAYA ADD HUAA HAI
-app.get('/api/webhooks/orders-create', (req, res) => {
+// 1. Meta Webhook Verification (GET Route)
+app.get('/api/webhooks', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
@@ -23,7 +23,7 @@ app.get('/api/webhooks/orders-create', (req, res) => {
 });
 
 // 2. Shopify Webhook Endpoint (Order Creation - POST Route)
-app.post('/api/webhooks/orders-create', async (req, res) => {
+app.post('/api/webhooks', async (req, res) => {
   try {
     const order = req.body;
     const customerPhone = order.phone || (order.shipping_address && order.shipping_address.phone);
@@ -38,7 +38,7 @@ app.post('/api/webhooks/orders-create', async (req, res) => {
     }
 
     res.status(200).send('Webhook Processed');
-  } code (error) {
+  } catch (error) {
     console.error('Webhook Error:', error.message);
     res.status(500).send('Error');
   }
