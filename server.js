@@ -7,7 +7,9 @@ const app = express();
 const {
   PORT = 3000,
   SHOPIFY_STORE,
+  SHOPIFY_API_KEY,
   SHOPIFY_API_SECRET,
+  SHOPIFY_CLIENT_SECRET,
   SHOPIFY_ACCESS_TOKEN,
   WHATSAPP_TOKEN,
   WHATSAPP_PHONE_ID,
@@ -55,9 +57,35 @@ function formatTotal(order) {
   return `${symbol}${order.total_price}`;
 }
 
-function shopifyHeaders() {
+// Shopify token khud fetch hota hai (client credentials), 24 ghante me expire hota hai
+let cachedToken = null;
+let tokenExpiresAt = 0;
+
+async function getShopifyToken() {
+  const clientSecret = (SHOPIFY_CLIENT_SECRET || "").trim();
+  // Agar client secret set nahi hai to purana SHOPIFY_ACCESS_TOKEN use hoga
+  if (!clientSecret) return SHOPIFY_ACCESS_TOKEN;
+
+  if (cachedToken && Date.now() < tokenExpiresAt - 60000) return cachedToken;
+
+  const body = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: (SHOPIFY_API_KEY || "").trim(),
+    client_secret: clientSecret,
+  });
+  const res = await axios.post(
+    `https://${SHOPIFY_STORE}/admin/oauth/access_token`,
+    body
+  );
+  cachedToken = res.data.access_token;
+  tokenExpiresAt = Date.now() + (res.data.expires_in || 86400) * 1000;
+  console.log("Naya Shopify token mil gaya");
+  return cachedToken;
+}
+
+async function shopifyHeaders() {
   return {
-    "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+    "X-Shopify-Access-Token": await getShopifyToken(),
     "Content-Type": "application/json",
   };
 }
@@ -66,7 +94,7 @@ async function getProductImage(productId) {
   if (!productId) return FALLBACK_IMAGE_URL || null;
   try {
     const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/products/${productId}.json?fields=id,image`;
-    const res = await axios.get(url, { headers: shopifyHeaders() });
+    const res = await axios.get(url, { headers: await shopifyHeaders() });
     return res.data?.product?.image?.src || FALLBACK_IMAGE_URL || null;
   } catch (err) {
     console.error("Product image error:", err.response?.data || err.message);
@@ -76,7 +104,7 @@ async function getProductImage(productId) {
 
 async function shopifyGraphQL(query, variables) {
   const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
-  const res = await axios.post(url, { query, variables }, { headers: shopifyHeaders() });
+  const res = await axios.post(url, { query, variables }, { headers: await shopifyHeaders() });
   const errors = res.data?.errors || res.data?.data?.tagsAdd?.userErrors;
   if (errors && errors.length) console.error("Shopify GraphQL issue:", JSON.stringify(errors));
   return res.data;
@@ -272,4 +300,4 @@ app.post("/webhook", async (req, res) => {
 app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
 
 app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
-    
+        
