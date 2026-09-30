@@ -1,97 +1,271 @@
-const express = require('express');
-const axios = require('axios');
+const express = require("express");
+const crypto = require("crypto");
+const axios = require("axios");
+
 const app = express();
 
-app.use(express.json());
-
 const {
-  SHOPIFY_API_KEY,
-  SHOPIFY_API_SECRET,
+  PORT = 3000,
   SHOPIFY_STORE,
-  VERIFY_TOKEN
+  SHOPIFY_API_SECRET,
+  SHOPIFY_ACCESS_TOKEN,
+  WHATSAPP_TOKEN,
+  WHATSAPP_PHONE_ID,
+  VERIFY_TOKEN,
+  FALLBACK_IMAGE_URL,
 } = process.env;
 
-// Main App Route
-app.get('/', (req, res) => {
-  res.send('WhatsApp Order Automation is Active!');
-});
+const SHOPIFY_API_VERSION = "2025-01";
+const GRAPH_VERSION = "v21.0";
+const TEMPLATE_NAME = "order_confirmation";
+const TEMPLATE_LANG = "en";
 
-// STEP A: Start OAuth - Shopify se auth shuru karna
-app.get('/auth', (req, res) => {
-  const scopes = 'read_orders,write_orders,read_customers,read_products,read_fulfillments,write_fulfillments';
-  const redirectUri = `https://${req.get('host')}/auth/callback`;
-  const installUrl = `https://${SHOPIFY_STORE}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${scopes}&redirect_uri=${redirectUri}`;
-  res.redirect(installUrl);
-});
+// Shopify retry kare to dobara message na jaye
+const processedOrders = new Set();
 
-// STEP B: Callback - yaha token milega
-app.get('/auth/callback', async (req, res) => {
-  const { code } = req.query;
+// ---------- Helpers ----------
 
-  if (!code) {
-    return res.status(400).send('Missing code');
-  }
-
-  try {
-    const tokenResponse = await axios.post(`https://${SHOPIFY_STORE}/admin/oauth/access_token`, {
-      client_id: SHOPIFY_API_KEY,
-      client_secret: SHOPIFY_API_SECRET,
-      code: code
-    });
-
-    const accessToken = tokenResponse.data.access_token;
-
-    console.log('=================================');
-    console.log('ACCESS TOKEN:', accessToken);
-    console.log('=================================');
-
-    res.send(`App installed successfully! Access Token: ${accessToken} (isko copy karke apne pass safe rakh lein)`);
-  } catch (error) {
-    console.error('OAuth Error:', error.response ? error.response.data : error.message);
-    res.status(500).send('OAuth failed: ' + (error.response ? JSON.stringify(error.response.data) : error.message));
-  }
-});
-
-// Meta Webhook Verification (GET Route)
-app.get('/api/webhooks', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-    console.log('Meta Webhook Verified Successfully!');
-    return res.status(200).send(challenge);
-  }
-  return res.sendStatus(403);
-});
-
-// Shopify Webhook Endpoint (Order Creation - POST Route)
-app.post('/api/webhooks', async (req, res) => {
-  try {
-    const order = req.body;
-    const customerPhone = order.phone || (order.shipping_address && order.shipping_address.phone);
-    const customerName = order.customer ? order.customer.first_name : 'Customer';
-    const orderId = order.name;
-    const totalPrice = order.total_price;
-
-    console.log(`New Order Received: ${orderId} for ${customerName}`);
-
-    if (customerPhone) {
-      await sendWhatsAppMessage(customerPhone, customerName, orderId, totalPrice);
-    }
-
-    res.status(200).send('Webhook Processed');
-  } catch (error) {
-    console.error('Webhook Error:', error.message);
-    res.status(500).send('Error');
-  }
-});
-
-async function sendWhatsAppMessage(phone, name, orderId, amount) {
-  console.log(`Sending WhatsApp message to ${phone}: Hello ${name}, order ${orderId} worth Rs.${amount} confirmed!`);
+function cleanPhone(raw) {
+  if (!raw) return null;
+  const digits = String(raw).replace(/\D/g, "");
+  if (digits.length < 10) return null;
+  return "91" + digits.slice(-10);
 }
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// WhatsApp template param me newline/tab/4+ spaces allowed nahi
+function cleanText(text, maxLen = 300) {
+  return String(text || "")
+    .replace(/[\r\n\t]+/g, ", ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/(,\s*){2,}/g, ", ")
+    .trim()
+    .slice(0, maxLen);
+}
+
+function formatAddress(a) {
+  if (!a) return "Address available nahi";
+  const parts = [a.name, a.address1, a.address2, a.city, a.province, a.zip]
+    .filter(Boolean)
+    .map((p) => cleanText(p));
+  return cleanText(parts.join(", "), 400) || "Address available nahi";
+}
+
+function formatTotal(order) {
+  const symbol = order.currency === "INR" ? "₹" : order.currency + " ";
+  return `${symbol}${order.total_price}`;
+}
+
+function shopifyHeaders() {
+  return {
+    "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+    "Content-Type": "application/json",
+  };
+}
+
+async function getProductImage(productId) {
+  if (!productId) return FALLBACK_IMAGE_URL || null;
+  try {
+    const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/products/${productId}.json?fields=id,image`;
+    const res = await axios.get(url, { headers: shopifyHeaders() });
+    return res.data?.product?.image?.src || FALLBACK_IMAGE_URL || null;
+  } catch (err) {
+    console.error("Product image error:", err.response?.data || err.message);
+    return FALLBACK_IMAGE_URL || null;
+  }
+}
+
+async function shopifyGraphQL(query, variables) {
+  const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
+  const res = await axios.post(url, { query, variables }, { headers: shopifyHeaders() });
+  const errors = res.data?.errors || res.data?.data?.tagsAdd?.userErrors;
+  if (errors && errors.length) console.error("Shopify GraphQL issue:", JSON.stringify(errors));
+  return res.data;
+}
+
+async function addTags(orderId, tags) {
+  const q = `mutation($id: ID!, $tags: [String!]!) {
+    tagsAdd(id: $id, tags: $tags) { userErrors { field message } }
+  }`;
+  await shopifyGraphQL(q, { id: `gid://shopify/Order/${orderId}`, tags });
+}
+
+async function removeTags(orderId, tags) {
+  const q = `mutation($id: ID!, $tags: [String!]!) {
+    tagsRemove(id: $id, tags: $tags) { userErrors { field message } }
+  }`;
+  await shopifyGraphQL(q, { id: `gid://shopify/Order/${orderId}`, tags });
+}
+
+async function sendWhatsApp(body) {
+  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${WHATSAPP_PHONE_ID}/messages`;
+  return axios.post(
+    url,
+    { messaging_product: "whatsapp", ...body },
+    { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, "Content-Type": "application/json" } }
+  );
+}
+
+async function sendText(to, text) {
+  try {
+    await sendWhatsApp({ to, type: "text", text: { body: text } });
+  } catch (err) {
+    console.error("sendText error:", err.response?.data || err.message);
+  }
+}
+
+// ---------- Shopify webhook: orders/create ----------
+// Raw body zaroori hai HMAC ke liye, isliye express.json() se PEHLE
+
+app.post(
+  "/webhooks/orders-create",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
+    const digest = crypto
+      .createHmac("sha256", SHOPIFY_API_SECRET || "")
+      .update(req.body)
+      .digest("base64");
+
+    const a = Buffer.from(digest);
+    const b = Buffer.from(hmacHeader);
+    const valid = a.length === b.length && crypto.timingSafeEqual(a, b);
+
+    if (!valid) {
+      console.warn("Invalid Shopify HMAC");
+      return res.status(401).send("Unauthorized");
+    }
+
+    // Shopify ko turant 200 do, kaam baad me
+    res.status(200).send("OK");
+
+    try {
+      const order = JSON.parse(req.body.toString("utf8"));
+      if (processedOrders.has(order.id)) return;
+      processedOrders.add(order.id);
+
+      const phone = cleanPhone(
+        order.shipping_address?.phone ||
+          order.phone ||
+          order.customer?.phone ||
+          order.billing_address?.phone
+      );
+      if (!phone) {
+        console.warn(`Order ${order.name}: valid phone nahi mila`);
+        await addTags(order.id, ["wa-no-phone"]);
+        return;
+      }
+
+      const customerName = cleanText(
+        order.shipping_address?.first_name || order.customer?.first_name || "Customer",
+        60
+      );
+      const items = cleanText(
+        (order.line_items || []).map((i) => `${i.quantity}x ${i.title}`).join(", "),
+        300
+      );
+      const imageUrl = await getProductImage(order.line_items?.[0]?.product_id);
+
+      const components = [
+        {
+          type: "body",
+          parameters: [
+            { type: "text", text: customerName },
+            { type: "text", text: String(order.name) },
+            { type: "text", text: items || "-" },
+            { type: "text", text: formatTotal(order) },
+            { type: "text", text: formatAddress(order.shipping_address) },
+          ],
+        },
+        {
+          type: "button",
+          sub_type: "quick_reply",
+          index: "0",
+          parameters: [{ type: "payload", payload: `CONFIRM_${order.id}` }],
+        },
+        {
+          type: "button",
+          sub_type: "quick_reply",
+          index: "1",
+          parameters: [{ type: "payload", payload: `CANCEL_${order.id}` }],
+        },
+      ];
+
+      if (imageUrl) {
+        components.unshift({
+          type: "header",
+          parameters: [{ type: "image", image: { link: imageUrl } }],
+        });
+      }
+
+      await sendWhatsApp({
+        to: phone,
+        type: "template",
+        template: {
+          name: TEMPLATE_NAME,
+          language: { code: TEMPLATE_LANG },
+          components,
+        },
+      });
+
+      await addTags(order.id, ["wa-pending"]);
+      console.log(`Order ${order.name}: WhatsApp bhej diya -> ${phone}`);
+    } catch (err) {
+      console.error("orders-create error:", err.response?.data || err.message);
+    }
+  }
+);
+
+// ---------- Baaki routes JSON use karenge ----------
+app.use(express.json());
+
+// ---------- Meta webhook: verify ----------
+app.get("/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+  res.sendStatus(403);
 });
+
+// ---------- Meta webhook: customer replies ----------
+app.post("/webhook", async (req, res) => {
+  res.sendStatus(200);
+
+  try {
+    const entries = req.body?.entry || [];
+    for (const entry of entries) {
+      for (const change of entry.changes || []) {
+        const messages = change.value?.messages || [];
+        for (const msg of messages) {
+          let payload = null;
+          if (msg.type === "button") payload = msg.button?.payload;
+          if (msg.type === "interactive") payload = msg.interactive?.button_reply?.id;
+          if (!payload) continue; // normal chat Business Suite Inbox me handle hogi
+
+          const [action, orderId] = String(payload).split("_");
+          if (!orderId) continue;
+
+          if (action === "CONFIRM") {
+            await addTags(orderId, ["wa-confirmed"]);
+            await removeTags(orderId, ["wa-pending", "wa-cancelled"]);
+            await sendText(msg.from, "Shukriya! ✅ Aapka order confirm ho gaya hai. Jaldi hi dispatch karenge.");
+          } else if (action === "CANCEL") {
+            await addTags(orderId, ["wa-cancelled"]);
+            await removeTags(orderId, ["wa-pending", "wa-confirmed"]);
+            await sendText(msg.from, "Theek hai, aapka cancel request mil gaya hai. Hamari team jaldi aapse sampark karegi.");
+          }
+          console.log(`Reply: ${action} order ${orderId}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("webhook POST error:", err.response?.data || err.message);
+  }
+});
+
+// ---------- Health check (pinger ke liye) ----------
+app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
+
+app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
