@@ -121,8 +121,9 @@ app.post(
   express.raw({ type: "application/json" }),
   async (req, res) => {
     const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
+    const secret = (SHOPIFY_API_SECRET || "").trim();
     const digest = crypto
-      .createHmac("sha256", SHOPIFY_API_SECRET || "")
+      .createHmac("sha256", secret)
       .update(req.body)
       .digest("base64");
 
@@ -131,7 +132,9 @@ app.post(
     const valid = a.length === b.length && crypto.timingSafeEqual(a, b);
 
     if (!valid) {
-      console.warn("Invalid Shopify HMAC");
+      console.warn(
+        `Invalid Shopify HMAC | secret length: ${secret.length} | header present: ${hmacHeader.length > 0}`
+      );
       return res.status(401).send("Unauthorized");
     }
 
@@ -269,3 +272,4 @@ app.post("/webhook", async (req, res) => {
 app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
 
 app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
+    
