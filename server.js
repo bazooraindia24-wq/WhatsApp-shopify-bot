@@ -228,7 +228,7 @@ app.post(
         });
       }
 
-      await sendWhatsApp({
+      const waRes = await sendWhatsApp({
         to: phone,
         type: "template",
         template: {
@@ -238,6 +238,7 @@ app.post(
         },
       });
 
+      console.log("Meta response:", JSON.stringify(waRes.data));
       await addTags(order.id, ["wa-pending"]);
       console.log(`Order ${order.name}: WhatsApp bhej diya -> ${phone}`);
     } catch (err) {
@@ -260,7 +261,7 @@ app.get("/webhook", (req, res) => {
   res.sendStatus(403);
 });
 
-// ---------- Meta webhook: customer replies ----------
+// ---------- Meta webhook: customer replies + delivery status ----------
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 
@@ -268,6 +269,10 @@ app.post("/webhook", async (req, res) => {
     const entries = req.body?.entry || [];
     for (const entry of entries) {
       for (const change of entry.changes || []) {
+        for (const st of change.value?.statuses || []) {
+          console.log("STATUS:", st.status, JSON.stringify(st.errors || ""));
+        }
+
         const messages = change.value?.messages || [];
         for (const msg of messages) {
           let payload = null;
@@ -300,4 +305,3 @@ app.post("/webhook", async (req, res) => {
 app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
 
 app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
-        
