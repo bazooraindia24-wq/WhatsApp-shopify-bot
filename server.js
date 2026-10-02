@@ -15,15 +15,18 @@ const {
   WHATSAPP_PHONE_ID,
   VERIFY_TOKEN,
   FALLBACK_IMAGE_URL,
+  CRON_SECRET,
 } = process.env;
 
 const SHOPIFY_API_VERSION = "2025-01";
 const GRAPH_VERSION = "v21.0";
 const TEMPLATE_NAME = "order_confirmation";
 const TEMPLATE_LANG = "en";
+const REMINDER_TEMPLATE = "delevery_reminder_";
+const REMINDER_DAYS = 3; // fulfill ke kitne din baad reminder
 
-// Shopify retry kare to dobara message na jaye
 const processedOrders = new Set();
+const remindingNow = new Set();
 
 // ---------- Helpers ----------
 
@@ -34,7 +37,6 @@ function cleanPhone(raw) {
   return "91" + digits.slice(-10);
 }
 
-// WhatsApp template param me newline/tab/4+ spaces allowed nahi
 function cleanText(text, maxLen = 300) {
   return String(text || "")
     .replace(/[\r\n\t]+/g, ", ")
@@ -57,13 +59,11 @@ function formatTotal(order) {
   return `${symbol}${order.total_price}`;
 }
 
-// Shopify token khud fetch hota hai (client credentials), 24 ghante me expire hota hai
 let cachedToken = null;
 let tokenExpiresAt = 0;
 
 async function getShopifyToken() {
   const clientSecret = (SHOPIFY_CLIENT_SECRET || "").trim();
-  // Agar client secret set nahi hai to purana SHOPIFY_ACCESS_TOKEN use hoga
   if (!clientSecret) return SHOPIFY_ACCESS_TOKEN;
 
   if (cachedToken && Date.now() < tokenExpiresAt - 60000) return cachedToken;
@@ -105,8 +105,7 @@ async function getProductImage(productId) {
 async function shopifyGraphQL(query, variables) {
   const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
   const res = await axios.post(url, { query, variables }, { headers: await shopifyHeaders() });
-  const errors = res.data?.errors || res.data?.data?.tagsAdd?.userErrors;
-  if (errors && errors.length) console.error("Shopify GraphQL issue:", JSON.stringify(errors));
+  if (res.data?.errors) console.error("Shopify GraphQL error:", JSON.stringify(res.data.errors));
   return res.data;
 }
 
@@ -142,7 +141,6 @@ async function sendText(to, text) {
 }
 
 // ---------- Shopify webhook: orders/create ----------
-// Raw body zaroori hai HMAC ke liye, isliye express.json() se PEHLE
 
 app.post(
   "/webhooks/orders-create",
@@ -166,7 +164,6 @@ app.post(
       return res.status(401).send("Unauthorized");
     }
 
-    // Shopify ko turant 200 do, kaam baad me
     res.status(200).send("OK");
 
     try {
@@ -247,7 +244,6 @@ app.post(
   }
 );
 
-// ---------- Baaki routes JSON use karenge ----------
 app.use(express.json());
 
 // ---------- Meta webhook: verify ----------
@@ -278,7 +274,7 @@ app.post("/webhook", async (req, res) => {
           let payload = null;
           if (msg.type === "button") payload = msg.button?.payload;
           if (msg.type === "interactive") payload = msg.interactive?.button_reply?.id;
-          if (!payload) continue; // normal chat Business Suite Inbox me handle hogi
+          if (!payload) continue;
 
           const [action, orderId] = String(payload).split("_");
           if (!orderId) continue;
@@ -286,11 +282,17 @@ app.post("/webhook", async (req, res) => {
           if (action === "CONFIRM") {
             await addTags(orderId, ["wa-confirmed"]);
             await removeTags(orderId, ["wa-pending", "wa-cancelled"]);
-            await sendText(msg.from, "Shukriya! ✅ Aapka order confirm ho gaya hai. Jaldi hi dispatch karenge.");
+            await sendText(
+              msg.from,
+              "Thanks! 🙏✅ Aapka order confirm ho gaya hai.\n\nHum jaldi hi ise dispatch karenge 🚚\nBazoora chunne ke liye dhanyavaad 😊"
+            );
           } else if (action === "CANCEL") {
             await addTags(orderId, ["wa-cancelled"]);
             await removeTags(orderId, ["wa-pending", "wa-confirmed"]);
-            await sendText(msg.from, "Theek hai, aapka cancel request mil gaya hai. Hamari team jaldi aapse sampark karegi.");
+            await sendText(
+              msg.from,
+              "Hello! 🙏 Aapka cancel request humne note kar liya hai, aur hamari team jaldi ise process kar degi 😊\n\nUmeed hai future mein hum aapki seva kar paayenge 🛍️✨\nBazoora chunne ke liye Thank you! ❤️"
+            );
           }
           console.log(`Reply: ${action} order ${orderId}`);
         }
@@ -301,7 +303,92 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// ---------- Health check (pinger ke liye) ----------
+// ---------- Delivery reminder (roz cron-job.org se chalega) ----------
+
+async function runReminders() {
+  const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const search = `fulfillment_status:fulfilled -tag:wa-reminded -tag:wa-cancelled created_at:>=${since}`;
+  const q = `query($q: String!) {
+    orders(first: 50, query: $q) {
+      nodes {
+        legacyResourceId
+        name
+        phone
+        customer { firstName phone }
+        shippingAddress { firstName name address1 address2 city province zip phone }
+        fulfillments(first: 5) { createdAt }
+      }
+    }
+  }`;
+
+  const data = await shopifyGraphQL(q, { q: search });
+  const orders = data?.data?.orders?.nodes || [];
+  console.log(`Reminder check: ${orders.length} fulfilled order(s) mile`);
+
+  for (const o of orders) {
+    const orderId = o.legacyResourceId;
+    if (remindingNow.has(orderId)) continue;
+
+    const times = (o.fulfillments || []).map((f) => new Date(f.createdAt).getTime());
+    if (!times.length) continue;
+    const days = (Date.now() - Math.min(...times)) / 86400000;
+    if (days < REMINDER_DAYS) continue;
+
+    const phone = cleanPhone(
+      o.shippingAddress?.phone || o.phone || o.customer?.phone
+    );
+    if (!phone) {
+      console.warn(`Reminder ${o.name}: phone nahi mila`);
+      await addTags(orderId, ["wa-reminded", "wa-no-phone"]);
+      continue;
+    }
+
+    remindingNow.add(orderId);
+    try {
+      const name = cleanText(
+        o.shippingAddress?.firstName || o.customer?.firstName || "Customer",
+        60
+      );
+      const waRes = await sendWhatsApp({
+        to: phone,
+        type: "template",
+        template: {
+          name: REMINDER_TEMPLATE,
+          language: { code: TEMPLATE_LANG },
+          components: [
+            {
+              type: "body",
+              parameters: [
+                { type: "text", text: name },
+                { type: "text", text: String(o.name) },
+                { type: "text", text: formatAddress(o.shippingAddress) },
+              ],
+            },
+          ],
+        },
+      });
+      console.log("Reminder Meta response:", JSON.stringify(waRes.data));
+      await addTags(orderId, ["wa-reminded"]);
+      console.log(`Reminder bheja: ${o.name} -> ${phone}`);
+    } catch (err) {
+      console.error(`Reminder error ${o.name}:`, err.response?.data || err.message);
+    } finally {
+      remindingNow.delete(orderId);
+    }
+  }
+}
+
+app.get("/cron/reminders", (req, res) => {
+  if (!CRON_SECRET || req.query.key !== CRON_SECRET) {
+    return res.status(403).send("Forbidden");
+  }
+  res.status(200).send("Reminder check shuru ho gaya");
+  runReminders().catch((err) =>
+    console.error("runReminders error:", err.response?.data || err.message)
+  );
+});
+
+// ---------- Health check ----------
 app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
 
 app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
