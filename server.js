@@ -22,7 +22,7 @@ const SHOPIFY_API_VERSION = "2025-01";
 const GRAPH_VERSION = "v21.0";
 const TEMPLATE_NAME = "order_confirmation";
 const TEMPLATE_LANG = "en";
-const REMINDER_TEMPLATE = "delevery_reminder";
+const REMINDER_TEMPLATE = "delevery_reminder_";
 const REMINDER_DAYS = 0; // fulfill ke kitne din baad reminder
 
 const processedOrders = new Set();
