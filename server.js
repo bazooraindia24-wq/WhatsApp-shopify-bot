@@ -22,8 +22,18 @@ const SHOPIFY_API_VERSION = "2025-01";
 const GRAPH_VERSION = "v21.0";
 const TEMPLATE_NAME = "order_confirmation";
 const TEMPLATE_LANG = "en";
-const REMINDER_TEMPLATE = "delevery_reminder_";
-const REMINDER_DAYS = 0; // fulfill ke kitne din baad reminder
+
+// Reminder kitne din baad jaye. Render me REMINDER_DAYS na ho to 3 din.
+const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 0);
+
+// Reminder template ke possible naam + language. Jo chal jaye wahi use hoga.
+const REMINDER_CANDIDATES = [
+  ["delevery_reminder", "en"],
+  ["delevery_reminder_", "en"],
+  ["delevery_reminder", "en_US"],
+  ["delevery_reminder_", "en_US"],
+  ["delivery_reminder", "en"],
+];
 
 const processedOrders = new Set();
 const remindingNow = new Set();
@@ -305,6 +315,37 @@ app.post("/webhook", async (req, res) => {
 
 // ---------- Delivery reminder (roz cron-job.org se chalega) ----------
 
+async function sendReminderTemplate(phone, name, orderName, address) {
+  let lastErr = null;
+  for (const [tname, lang] of REMINDER_CANDIDATES) {
+    try {
+      const res = await sendWhatsApp({
+        to: phone,
+        type: "template",
+        template: {
+          name: tname,
+          language: { code: lang },
+          components: [
+            {
+              type: "body",
+              parameters: [
+                { type: "text", text: name },
+                { type: "text", text: orderName },
+                { type: "text", text: address },
+              ],
+            },
+          ],
+        },
+      });
+      console.log("Reminder template chala:", tname, lang);
+      return res;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
+
 async function runReminders() {
   const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
   const search = `fulfillment_status:fulfilled -tag:wa-reminded -tag:wa-cancelled created_at:>=${since}`;
@@ -323,7 +364,7 @@ async function runReminders() {
 
   const data = await shopifyGraphQL(q, { q: search });
   const orders = data?.data?.orders?.nodes || [];
-  console.log(`Reminder check: ${orders.length} fulfilled order(s) mile`);
+  console.log(`Reminder check: ${orders.length} fulfilled order(s) mile (REMINDER_DAYS=${REMINDER_DAYS})`);
 
   for (const o of orders) {
     const orderId = o.legacyResourceId;
@@ -349,29 +390,17 @@ async function runReminders() {
         o.shippingAddress?.firstName || o.customer?.firstName || "Customer",
         60
       );
-      const waRes = await sendWhatsApp({
-        to: phone,
-        type: "template",
-        template: {
-          name: REMINDER_TEMPLATE,
-          language: { code: TEMPLATE_LANG },
-          components: [
-            {
-              type: "body",
-              parameters: [
-                { type: "text", text: name },
-                { type: "text", text: String(o.name) },
-                { type: "text", text: formatAddress(o.shippingAddress) },
-              ],
-            },
-          ],
-        },
-      });
+      const waRes = await sendReminderTemplate(
+        phone,
+        name,
+        String(o.name),
+        formatAddress(o.shippingAddress)
+      );
       console.log("Reminder Meta response:", JSON.stringify(waRes.data));
       await addTags(orderId, ["wa-reminded"]);
       console.log(`Reminder bheja: ${o.name} -> ${phone}`);
     } catch (err) {
-      console.error(`Reminder error ${o.name}:`, err.response?.data || err.message);
+      console.error(`Reminder error ${o.name}:`, JSON.stringify(err.response?.data || err.message));
     } finally {
       remindingNow.delete(orderId);
     }
