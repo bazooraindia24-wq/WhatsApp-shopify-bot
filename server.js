@@ -23,7 +23,6 @@ const GRAPH_VERSION = "v21.0";
 const TEMPLATE_NAME = "order_confirmation";
 const TEMPLATE_LANG = "en";
 
-// Reminder template (ye naam chal chuka hai)
 const REMINDER_TEMPLATE = "delivery_reminder";
 const REMINDER_LANG = "en";
 
@@ -31,7 +30,7 @@ const REMINDER_LANG = "en";
 const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 0);
 
 const processedOrders = new Set();
-const remindedOrders = new Set(); // double reminder rokne ke liye
+const remindedOrders = new Set();
 let reminderRunning = false;
 
 // ---------- Helpers ----------
@@ -193,10 +192,21 @@ app.post(
         order.shipping_address?.first_name || order.customer?.first_name || "Customer",
         60
       );
+
+      // Product ka naam + variant (jaise "2 hair straightener") + quantity
       const items = cleanText(
-        (order.line_items || []).map((i) => `${i.quantity}x ${i.title}`).join(", "),
+        (order.line_items || [])
+          .map((i) => {
+            const v =
+              i.variant_title && i.variant_title !== "Default Title"
+                ? ` - ${i.variant_title}`
+                : "";
+            return `${i.quantity}x ${i.title}${v}`;
+          })
+          .join(", "),
         300
       );
+
       const imageUrl = await getProductImage(order.line_items?.[0]?.product_id);
 
       const components = [
@@ -357,7 +367,6 @@ async function runReminders() {
         continue;
       }
 
-      // Pehle hi mark karo taaki dobara na jaye
       remindedOrders.add(orderId);
       try {
         const name = cleanText(
@@ -386,7 +395,7 @@ async function runReminders() {
         await addTags(orderId, ["wa-reminded"]);
         console.log(`Reminder bheja: ${o.name} -> ${phone}`);
       } catch (err) {
-        remindedOrders.delete(orderId); // fail hua to agli baar retry
+        remindedOrders.delete(orderId);
         console.error(`Reminder error ${o.name}:`, JSON.stringify(err.response?.data || err.message));
       }
     }
