@@ -23,20 +23,16 @@ const GRAPH_VERSION = "v21.0";
 const TEMPLATE_NAME = "order_confirmation";
 const TEMPLATE_LANG = "en";
 
-// Reminder kitne din baad jaye. Render me REMINDER_DAYS na ho to 3 din.
-const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 0);
+// Reminder template (ye naam chal chuka hai)
+const REMINDER_TEMPLATE = "delivery_reminder";
+const REMINDER_LANG = "en";
 
-// Reminder template ke possible naam + language. Jo chal jaye wahi use hoga.
-const REMINDER_CANDIDATES = [
-  ["delevery_reminder", "en"],
-  ["delevery_reminder_", "en"],
-  ["delevery_reminder", "en_US"],
-  ["delevery_reminder_", "en_US"],
-  ["delivery_reminder", "en"],
-];
+// Fulfill ke kitne din baad reminder. Render me REMINDER_DAYS na ho to 3.
+const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 1);
 
 const processedOrders = new Set();
-const remindingNow = new Set();
+const remindedOrders = new Set(); // double reminder rokne ke liye
+let reminderRunning = false;
 
 // ---------- Helpers ----------
 
@@ -315,95 +311,87 @@ app.post("/webhook", async (req, res) => {
 
 // ---------- Delivery reminder (roz cron-job.org se chalega) ----------
 
-async function sendReminderTemplate(phone, name, orderName, address) {
-  let lastErr = null;
-  for (const [tname, lang] of REMINDER_CANDIDATES) {
-    try {
-      const res = await sendWhatsApp({
-        to: phone,
-        type: "template",
-        template: {
-          name: tname,
-          language: { code: lang },
-          components: [
-            {
-              type: "body",
-              parameters: [
-                { type: "text", text: name },
-                { type: "text", text: orderName },
-                { type: "text", text: address },
-              ],
-            },
-          ],
-        },
-      });
-      console.log("Reminder template chala:", tname, lang);
-      return res;
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr;
-}
-
 async function runReminders() {
-  const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-  const search = `fulfillment_status:fulfilled -tag:wa-reminded -tag:wa-cancelled created_at:>=${since}`;
-  const q = `query($q: String!) {
-    orders(first: 50, query: $q) {
-      nodes {
-        legacyResourceId
-        name
-        phone
-        customer { firstName phone }
-        shippingAddress { firstName name address1 address2 city province zip phone }
-        fulfillments(first: 5) { createdAt }
+  if (reminderRunning) {
+    console.log("Reminder check pehle se chal raha hai, ye skip");
+    return;
+  }
+  reminderRunning = true;
+
+  try {
+    const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    const search = `fulfillment_status:fulfilled -tag:wa-reminded -tag:wa-cancelled created_at:>=${since}`;
+    const q = `query($q: String!) {
+      orders(first: 200, query: $q) {
+        nodes {
+          legacyResourceId
+          name
+          phone
+          customer { firstName phone }
+          shippingAddress { firstName name address1 address2 city province zip phone }
+          fulfillments(first: 5) { createdAt }
+        }
+      }
+    }`;
+
+    const data = await shopifyGraphQL(q, { q: search });
+    const orders = data?.data?.orders?.nodes || [];
+    console.log(`Reminder check: ${orders.length} fulfilled order(s) mile (REMINDER_DAYS=${REMINDER_DAYS})`);
+
+    for (const o of orders) {
+      const orderId = o.legacyResourceId;
+      if (remindedOrders.has(orderId)) continue;
+
+      const times = (o.fulfillments || []).map((f) => new Date(f.createdAt).getTime());
+      if (!times.length) continue;
+      const days = (Date.now() - Math.min(...times)) / 86400000;
+      if (days < REMINDER_DAYS) continue;
+
+      const phone = cleanPhone(
+        o.shippingAddress?.phone || o.phone || o.customer?.phone
+      );
+      if (!phone) {
+        console.warn(`Reminder ${o.name}: phone nahi mila`);
+        remindedOrders.add(orderId);
+        await addTags(orderId, ["wa-reminded", "wa-no-phone"]);
+        continue;
+      }
+
+      // Pehle hi mark karo taaki dobara na jaye
+      remindedOrders.add(orderId);
+      try {
+        const name = cleanText(
+          o.shippingAddress?.firstName || o.customer?.firstName || "Customer",
+          60
+        );
+        const waRes = await sendWhatsApp({
+          to: phone,
+          type: "template",
+          template: {
+            name: REMINDER_TEMPLATE,
+            language: { code: REMINDER_LANG },
+            components: [
+              {
+                type: "body",
+                parameters: [
+                  { type: "text", text: name },
+                  { type: "text", text: String(o.name) },
+                  { type: "text", text: formatAddress(o.shippingAddress) },
+                ],
+              },
+            ],
+          },
+        });
+        console.log("Reminder Meta response:", JSON.stringify(waRes.data));
+        await addTags(orderId, ["wa-reminded"]);
+        console.log(`Reminder bheja: ${o.name} -> ${phone}`);
+      } catch (err) {
+        remindedOrders.delete(orderId); // fail hua to agli baar retry
+        console.error(`Reminder error ${o.name}:`, JSON.stringify(err.response?.data || err.message));
       }
     }
-  }`;
-
-  const data = await shopifyGraphQL(q, { q: search });
-  const orders = data?.data?.orders?.nodes || [];
-  console.log(`Reminder check: ${orders.length} fulfilled order(s) mile (REMINDER_DAYS=${REMINDER_DAYS})`);
-
-  for (const o of orders) {
-    const orderId = o.legacyResourceId;
-    if (remindingNow.has(orderId)) continue;
-
-    const times = (o.fulfillments || []).map((f) => new Date(f.createdAt).getTime());
-    if (!times.length) continue;
-    const days = (Date.now() - Math.min(...times)) / 86400000;
-    if (days < REMINDER_DAYS) continue;
-
-    const phone = cleanPhone(
-      o.shippingAddress?.phone || o.phone || o.customer?.phone
-    );
-    if (!phone) {
-      console.warn(`Reminder ${o.name}: phone nahi mila`);
-      await addTags(orderId, ["wa-reminded", "wa-no-phone"]);
-      continue;
-    }
-
-    remindingNow.add(orderId);
-    try {
-      const name = cleanText(
-        o.shippingAddress?.firstName || o.customer?.firstName || "Customer",
-        60
-      );
-      const waRes = await sendReminderTemplate(
-        phone,
-        name,
-        String(o.name),
-        formatAddress(o.shippingAddress)
-      );
-      console.log("Reminder Meta response:", JSON.stringify(waRes.data));
-      await addTags(orderId, ["wa-reminded"]);
-      console.log(`Reminder bheja: ${o.name} -> ${phone}`);
-    } catch (err) {
-      console.error(`Reminder error ${o.name}:`, JSON.stringify(err.response?.data || err.message));
-    } finally {
-      remindingNow.delete(orderId);
-    }
+  } finally {
+    reminderRunning = false;
   }
 }
 
@@ -412,9 +400,10 @@ app.get("/cron/reminders", (req, res) => {
     return res.status(403).send("Forbidden");
   }
   res.status(200).send("Reminder check shuru ho gaya");
-  runReminders().catch((err) =>
-    console.error("runReminders error:", err.response?.data || err.message)
-  );
+  runReminders().catch((err) => {
+    reminderRunning = false;
+    console.error("runReminders error:", err.response?.data || err.message);
+  });
 });
 
 // ---------- Health check ----------
