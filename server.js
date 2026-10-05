@@ -29,7 +29,7 @@ const REMINDER_TEMPLATE = "delivery_reminder";
 const REMINDER_LANG = "en";
 
 // Fulfill ke kitne din baad reminder (default 3)
-const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 3);
+const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 0);
 
 const processedOrders = new Set();
 const remindedOrders = new Set();
