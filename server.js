@@ -520,7 +520,13 @@ async function runReminders() {
           phone
           customer { firstName phone }
           shippingAddress { firstName name address1 address2 city province zip phone }
-          fulfillments(first: 5) { createdAt }
+          fulfillments(first: 5) {
+            createdAt
+            trackingInfo {
+              url
+              number
+            }
+          }
         }
       }
     }`;
@@ -533,7 +539,8 @@ async function runReminders() {
       const orderId = o.legacyResourceId;
       if (remindedOrders.has(orderId)) continue;
 
-      const times = (o.fulfillments || []).map((f) => new Date(f.createdAt).getTime());
+      const fulfillments = o.fulfillments || [];
+      const times = fulfillments.map((f) => new Date(f.createdAt).getTime());
       if (!times.length) continue;
       const days = (Date.now() - Math.min(...times)) / 86400000;
       if (days < REMINDER_DAYS) continue;
@@ -547,6 +554,10 @@ async function runReminders() {
         await addTags(orderId, ["wa-reminded", "wa-no-phone"]);
         continue;
       }
+
+      // Shopify fulfillment se tracking URL detect karna
+      const validFulfillment = fulfillments.find((f) => f.trackingInfo && f.trackingInfo.url);
+      const trackingUrl = validFulfillment?.trackingInfo?.url || "Tracking link available nahi";
 
       remindedOrders.add(orderId);
       try {
@@ -567,6 +578,7 @@ async function runReminders() {
                   { type: "text", text: name },
                   { type: "text", text: String(o.name) },
                   { type: "text", text: formatAddress(o.shippingAddress) },
+                  { type: "text", text: trackingUrl }, // {{4}} me tracking link jayega
                 ],
               },
             ],
@@ -596,7 +608,4 @@ app.get("/cron/reminders", (req, res) => {
   });
 });
 
-// ---------- Health check ----------
-app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
-
-app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
+// ---------
