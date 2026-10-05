@@ -608,4 +608,7 @@ app.get("/cron/reminders", (req, res) => {
   });
 });
 
-// ---------
+// ---------- Health check ----------
+app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
+
+app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
