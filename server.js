@@ -128,9 +128,13 @@ async function askGeminiChat(systemText, contents) {
           {
             systemInstruction: { parts: [{ text: systemText }] },
             contents,
-            generationConfig: { temperature: 0.4, maxOutputTokens: 1024 },
+            generationConfig: {
+              temperature: 0.4,
+              maxOutputTokens: 1024,
+              thinkingConfig: { thinkingLevel: "low" },
+            },
           },
-          { timeout: 20000 }
+          { timeout: 12000 }
         );
         const text = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (text) return text;
@@ -143,7 +147,9 @@ async function askGeminiChat(systemText, contents) {
           status,
           err.response?.data?.error?.message || err.message
         );
-        const busy = !status || [429, 500, 503, 504].includes(status);
+        // timeout (status nahi) ho to usi model pe ruke nahi, seedha dusre model pe jao
+        if (!status) break;
+        const busy = [429, 500, 503, 504].includes(status);
         if (!busy) break;
         if (attempt < 2) await new Promise((r) => setTimeout(r, 2500));
       }
@@ -538,12 +544,12 @@ app.post(
         (order.line_items || [])
           .map((i) => {
             const v =
-              i.variant_title && i.variant_title !== "Default Title"
+    i.variant_title && i.variant_title !== "Default Title"
                 ? ` - ${i.variant_title}`
                 : "";
             return `${i.quantity}x ${i.title}${v}`;
           })
-         .join(", "),
+          .join(", "),
         300
       );
 
@@ -900,4 +906,4 @@ app.get("/cron/reminders", (req, res) => {
 app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
 
 app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
-      
+        
