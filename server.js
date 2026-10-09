@@ -1,11 +1,11 @@
-const express = require("express");
-const crypto = require("crypto");
-const axios = require("axios");
-const fs = require("fs");
+Const express = require("express");
+Const crypto = require("crypto");
+Const axios = require("axios");
+Const fs = require("fs");
 
-const app = express();
+Const app = express();
 
-const {
+Const {
   PORT = 3000,
   SHOPIFY_STORE,
   SHOPIFY_API_KEY,
@@ -18,92 +18,109 @@ const {
   FALLBACK_IMAGE_URL,
   CRON_SECRET,
   INBOX_SECRET,
+  GEMINI_API_KEY,
 } = process.env;
 
 const SHOPIFY_API_VERSION = "2025-01";
-const GRAPH_VERSION = "v21.0";
-const TEMPLATE_NAME = "order_confirmation";
-const TEMPLATE_LANG = "en";
+Const GRAPH_VERSION = "v21.0";
+Const TEMPLATE_NAME = "order_confirmation";
+Const TEMPLATE_LANG = "en";
 
-const REMINDER_TEMPLATE = "delivery_reminder";
-const REMINDER_LANG = "en";
+Const REMINDER_TEMPLATE = "delivery_reminder";
+Const REMINDER_LANG = "en";
 
 // Fulfill ke kitne din baad reminder (default 3)
-const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 3);
+Const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 3);
 
-const processedOrders = new Set();
-const remindedOrders = new Set();
-let reminderRunning = false;
+Const processedOrders = new Set();
+Const remindedOrders = new Set();
+Let reminderRunning = false;
+
+// ---------- Gemini AI Helper ----------
+
+async function askGemini(promptText) {
+  If (!GEMINI_API_KEY) return null;
+  Try {
+    Const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    Const res = await axios.post(url, {
+      Contents: [{ parts: [{ text: promptText }] }]
+    });
+    Return res.data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+  } catch (err) {
+    Console.error("Gemini API error:", err.response?.data || err.message);
+    Return null;
+  }
+}
 
 // ---------- Inbox storage ----------
 
-const INBOX_FILE = "inbox-data.json";
-const conversations = new Map();
+Const INBOX_FILE = "inbox-data.json";
+Const conversations = new Map();
 
-try {
-  const saved = JSON.parse(fs.readFileSync(INBOX_FILE, "utf8"));
-  for (const [k, v] of Object.entries(saved)) conversations.set(k, v);
+Try {
+  Const saved = JSON.parse(fs.readFileSync(INBOX_FILE, "utf8"));
+  For (const [k, v] of Object.entries(saved)) conversations.set(k, v);
 } catch (e) {}
 
-let saveTimer = null;
-function saveInbox() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try {
-      fs.writeFileSync(INBOX_FILE, JSON.stringify(Object.fromEntries(conversations)));
+Let saveTimer = null;
+Function saveInbox() {
+  ClearTimeout(saveTimer);
+  SaveTimer = setTimeout(() => {
+    Try {
+      Fs.writeFileSync(INBOX_FILE, JSON.stringify(Object.fromEntries(conversations)));
     } catch (e) {}
   }, 1000);
 }
 
-function addMessage(phone, dir, text, name) {
-  let c = conversations.get(phone);
-  if (!c) {
-    c = { name: "", messages: [] };
-    conversations.set(phone, c);
+Function addMessage(phone, dir, text, name) {
+  Let c = conversations.get(phone);
+  If (!c) {
+    C = { name: "", messages: [] };
+    Conversations.set(phone, c);
   }
-  if (name) c.name = name;
-  c.messages.push({ dir, text: String(text).slice(0, 2000), time: Date.now() });
-  if (c.messages.length > 200) c.messages = c.messages.slice(-200);
-  saveInbox();
+  If (name) c.name = name;
+  C.messages.push({ dir, text: String(text).slice(0, 2000), time: Date.now() });
+  If (c.messages.length > 200) c.messages = c.messages.slice(-200);
+  SaveInbox();
 }
 
-function describeMessage(msg) {
-  if (msg.type === "text") return msg.text?.body || "";
-  if (msg.type === "button") return `[Button] ${msg.button?.text || ""}`;
-  if (msg.type === "interactive")
-    return `[Button] ${msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || ""}`;
-  return `[${msg.type}]`;
+Function describeMessage(msg) {
+  If (msg.type === "text") return msg.text?.body || "";
+  If (msg.type === "button") return `[Button] ${msg.button?.text || ""}`;
+  If (msg.type === "interactive")
+    Return `[Button] ${msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || ""}`;
+  Return `[${msg.type}]`;
 }
 
-function esc(s) {
-  return String(s)
+Function esc(s) {
+  Return String(s)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
 
-function fmtTime(t) {
-  return new Date(t).toLocaleString("en-IN", {
-    timeZone: "Asia/Kolkata",
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
+Function fmtTime(t) {
+  Return new Date(t).toLocaleString("en-IN", {
+    TimeZone: "Asia/Kolkata",
+    Day: "2-digit",
+    Month: "short",
+    Hour: "2-digit",
+    Minute: "2-digit",
   });
 }
 
 // ---------- Helpers ----------
 
-function cleanPhone(raw) {
-  if (!raw) return null;
-  const digits = String(raw).replace(/\D/g, "");
-  if (digits.length < 10) return null;
-  return "91" + digits.slice(-10);
+Function cleanPhone(raw) {
+  If (!raw) return null;
+  Const digits = String(raw).replace(/\D/g, "");
+  If (digits.length < 10) return null;
+  Return "91" + digits.slice(-10);
 }
 
-function cleanText(text, maxLen = 300) {
-  return String(text || "")
+Function cleanText(text, maxLen = 300) {
+  Return String(text || "")
     .replace(/[\r\n\t]+/g, ", ")
     .replace(/\s{2,}/g, " ")
     .replace(/(,\s*){2,}/g, ", ")
@@ -111,292 +128,314 @@ function cleanText(text, maxLen = 300) {
     .slice(0, maxLen);
 }
 
-function formatAddress(a) {
-  if (!a) return "Address available nahi";
-  const parts = [a.name, a.address1, a.address2, a.city, a.province, a.zip]
+Function formatAddress(a) {
+  If (!a) return "Address available nahi";
+  Const parts = [a.name, a.address1, a.address2, a.city, a.province, a.zip]
     .filter(Boolean)
     .map((p) => cleanText(p));
-  return cleanText(parts.join(", "), 400) || "Address available nahi";
+  Return cleanText(parts.join(", "), 400) || "Address available nahi";
 }
 
-function formatTotal(order) {
-  const symbol = order.currency === "INR" ? "₹" : order.currency + " ";
-  return `${symbol}${order.total_price}`;
+Function formatTotal(order) {
+  Const symbol = order.currency === "INR" ? "₹" : order.currency + " ";
+  Return `${symbol}${order.total_price}`;
 }
 
-let cachedToken = null;
-let tokenExpiresAt = 0;
+Let cachedToken = null;
+Let tokenExpiresAt = 0;
 
 async function getShopifyToken() {
-  const clientSecret = (SHOPIFY_CLIENT_SECRET || "").trim();
-  if (!clientSecret) return SHOPIFY_ACCESS_TOKEN;
+  Const clientSecret = (SHOPIFY_CLIENT_SECRET || "").trim();
+  If (!clientSecret) return SHOPIFY_ACCESS_TOKEN;
 
-  if (cachedToken && Date.now() < tokenExpiresAt - 60000) return cachedToken;
+  If (cachedToken && Date.now() < tokenExpiresAt - 60000) return cachedToken;
 
-  const body = new URLSearchParams({
-    grant_type: "client_credentials",
-    client_id: (SHOPIFY_API_KEY || "").trim(),
-    client_secret: clientSecret,
+  Const body = new URLSearchParams({
+    Grant_type: "client_credentials",
+    Client_id: (SHOPIFY_API_KEY || "").trim(),
+    Client_secret: clientSecret,
   });
-  const res = await axios.post(
+  Const res = await axios.post(
     `https://${SHOPIFY_STORE}/admin/oauth/access_token`,
-    body
+    Body
   );
-  cachedToken = res.data.access_token;
-  tokenExpiresAt = Date.now() + (res.data.expires_in || 86400) * 1000;
-  console.log("Naya Shopify token mil gaya");
-  return cachedToken;
+  CachedToken = res.data.access_token;
+  TokenExpiresAt = Date.now() + (res.data.expires_in || 86400) * 1000;
+  Console.log("Naya Shopify token mil gaya");
+  Return cachedToken;
 }
 
 async function shopifyHeaders() {
-  return {
+  Return {
     "X-Shopify-Access-Token": await getShopifyToken(),
     "Content-Type": "application/json",
   };
 }
 
 async function getProductImage(productId) {
-  if (!productId) return FALLBACK_IMAGE_URL || null;
-  try {
-    const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/products/${productId}.json?fields=id,image`;
-    const res = await axios.get(url, { headers: await shopifyHeaders() });
-    return res.data?.product?.image?.src || FALLBACK_IMAGE_URL || null;
+  If (!productId) return FALLBACK_IMAGE_URL || null;
+  Try {
+    Const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/products/${productId}.json?fields=id,image`;
+    Const res = await axios.get(url, { headers: await shopifyHeaders() });
+    Return res.data?.product?.image?.src || FALLBACK_IMAGE_URL || null;
   } catch (err) {
-    console.error("Product image error:", err.response?.data || err.message);
-    return FALLBACK_IMAGE_URL || null;
+    Console.error("Product image error:", err.response?.data || err.message);
+    Return FALLBACK_IMAGE_URL || null;
   }
 }
 
 async function shopifyGraphQL(query, variables) {
-  const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
-  const res = await axios.post(url, { query, variables }, { headers: await shopifyHeaders() });
-  if (res.data?.errors) console.error("Shopify GraphQL error:", JSON.stringify(res.data.errors));
-  return res.data;
+  Const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
+  Const res = await axios.post(url, { query, variables }, { headers: await shopifyHeaders() });
+  If (res.data?.errors) console.error("Shopify GraphQL error:", JSON.stringify(res.data.errors));
+  Return res.data;
 }
 
 async function addTags(orderId, tags) {
-  const q = `mutation($id: ID!, $tags: [String!]!) {
-    tagsAdd(id: $id, tags: $tags) { userErrors { field message } }
+  Const q = `mutation($id: ID!, $tags: [String!]!) {
+    TagsAdd(id: $id, tags: $tags) { userErrors { field message } }
   }`;
-  await shopifyGraphQL(q, { id: `gid://shopify/Order/${orderId}`, tags });
+  Await shopifyGraphQL(q, { id: `gid://shopify/Order/${orderId}`, tags });
 }
 
 async function removeTags(orderId, tags) {
-  const q = `mutation($id: ID!, $tags: [String!]!) {
-    tagsRemove(id: $id, tags: $tags) { userErrors { field message } }
+  Const q = `mutation($id: ID!, $tags: [String!]!) {
+    TagsRemove(id: $id, tags: $tags) { userErrors { field message } }
   }`;
-  await shopifyGraphQL(q, { id: `gid://shopify/Order/${orderId}`, tags });
+  Await shopifyGraphQL(q, { id: `gid://shopify/Order/${orderId}`, tags });
 }
 
 async function sendWhatsApp(body) {
-  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${WHATSAPP_PHONE_ID}/messages`;
-  return axios.post(
-    url,
+  Const url = `https://graph.facebook.com/${GRAPH_VERSION}/${WHATSAPP_PHONE_ID}/messages`;
+  Return axios.post(
+    Url,
     { messaging_product: "whatsapp", ...body },
     { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, "Content-Type": "application/json" } }
   );
 }
 
 async function sendText(to, text) {
-  try {
-    await sendWhatsApp({ to, type: "text", text: { body: text } });
+  Try {
+    Await sendWhatsApp({ to, type: "text", text: { body: text } });
   } catch (err) {
-    console.error("sendText error:", err.response?.data || err.message);
+    Console.error("sendText error:", err.response?.data || err.message);
   }
 }
 
 // ---------- Shopify webhook: orders/create ----------
 
-app.post(
+App.post(
   "/webhooks/orders-create",
-  express.raw({ type: "application/json" }),
+  Express.raw({ type: "application/json" }),
   async (req, res) => {
-    const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
-    const secret = (SHOPIFY_API_SECRET || "").trim();
-    const digest = crypto
+    Const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
+    Const secret = (SHOPIFY_API_SECRET || "").trim();
+    Const digest = crypto
       .createHmac("sha256", secret)
       .update(req.body)
       .digest("base64");
 
-    const a = Buffer.from(digest);
-    const b = Buffer.from(hmacHeader);
-    const valid = a.length === b.length && crypto.timingSafeEqual(a, b);
+    Const a = Buffer.from(digest);
+    Const b = Buffer.from(hmacHeader);
+    Const valid = a.length === b.length && crypto.timingSafeEqual(a, b);
 
-    if (!valid) {
-      console.warn(
+    If (!valid) {
+      Console.warn(
         `Invalid Shopify HMAC | secret length: ${secret.length} | header present: ${hmacHeader.length > 0}`
       );
-      return res.status(401).send("Unauthorized");
+      Return res.status(401).send("Unauthorized");
     }
 
-    res.status(200).send("OK");
+    Res.status(200).send("OK");
 
-    try {
-      const order = JSON.parse(req.body.toString("utf8"));
-      if (processedOrders.has(order.id)) return;
-      processedOrders.add(order.id);
+    Try {
+      Const order = JSON.parse(req.body.toString("utf8"));
+      If (processedOrders.has(order.id)) return;
+      ProcessedOrders.add(order.id);
 
-      const phone = cleanPhone(
-        order.shipping_address?.phone ||
-          order.phone ||
-          order.customer?.phone ||
-          order.billing_address?.phone
+      Const phone = cleanPhone(
+        Order.shipping_address?.phone ||
+          Order.phone ||
+          Order.customer?.phone ||
+          Order.billing_address?.phone
       );
-      if (!phone) {
-        console.warn(`Order ${order.name}: valid phone nahi mila`);
-        await addTags(order.id, ["wa-no-phone"]);
-        return;
+      If (!phone) {
+        Console.warn(`Order ${order.name}: valid phone nahi mila`);
+        Await addTags(order.id, ["wa-no-phone"]);
+        Return;
       }
 
-      const customerName = cleanText(
-        order.shipping_address?.first_name || order.customer?.first_name || "Customer",
+      // AI Address Validation Check
+      Const rawAddr = formatAddress(order.shipping_address);
+      Let addressWarning = "";
+      If (GEMINI_API_KEY) {
+        Const aiPrompt = `Analyze this e-commerce shipping address: "${rawAddr}". Check if there are dummy entries like "123" for house numbers or severe State/Pincode mismatch. If everything is fine, reply with "OK". If there is a clear error or fake data, reply with a short warning in Hindi/English under 15 words.`;
+        Const aiRes = await askGemini(aiPrompt);
+        If (aiRes && !aiRes.trim().toUpperCase().startsWith("OK")) {
+          AddressWarning = `\n⚠️ Note: ${aiRes.trim()}`;
+        }
+      }
+
+      Const customerName = cleanText(
+        Order.shipping_address?.first_name || order.customer?.first_name || "Customer",
         60
       );
 
-      const items = cleanText(
+      Const items = cleanText(
         (order.line_items || [])
           .map((i) => {
-            const v =
-              i.variant_title && i.variant_title !== "Default Title"
+            Const v =
+              I.variant_title && i.variant_title !== "Default Title"
                 ? ` - ${i.variant_title}`
                 : "";
-            return `${i.quantity}x ${i.title}${v}`;
+            Return `${i.quantity}x ${i.title}${v}`;
           })
           .join(", "),
         300
       );
 
-      const imageUrl = await getProductImage(order.line_items?.[0]?.product_id);
+      Const imageUrl = await getProductImage(order.line_items?.[0]?.product_id);
 
-      const components = [
+      Const components = [
         {
-          type: "body",
-          parameters: [
+          Type: "body",
+          Parameters: [
             { type: "text", text: customerName },
             { type: "text", text: String(order.name) },
             { type: "text", text: items || "-" },
             { type: "text", text: formatTotal(order) },
-            { type: "text", text: formatAddress(order.shipping_address) },
+            { type: "text", text: rawAddr + addressWarning },
           ],
         },
         {
-          type: "button",
-          sub_type: "quick_reply",
-          index: "0",
-          parameters: [{ type: "payload", payload: `CONFIRM_${order.id}` }],
+          Type: "button",
+          Sub_type: "quick_reply",
+          Index: "0",
+          Parameters: [{ type: "payload", payload: `CONFIRM_${order.id}` }],
         },
         {
-          type: "button",
-          sub_type: "quick_reply",
-          index: "1",
-          parameters: [{ type: "payload", payload: `CANCEL_${order.id}` }],
+          Type: "button",
+          Sub_type: "quick_reply",
+          Index: "1",
+          Parameters: [{ type: "payload", payload: `CANCEL_${order.id}` }],
         },
       ];
 
-      if (imageUrl) {
-        components.unshift({
-          type: "header",
-          parameters: [{ type: "image", image: { link: imageUrl } }],
+      If (imageUrl) {
+        Components.unshift({
+          Type: "header",
+          Parameters: [{ type: "image", image: { link: imageUrl } }],
         });
       }
 
-      const waRes = await sendWhatsApp({
-        to: phone,
-        type: "template",
-        template: {
-          name: TEMPLATE_NAME,
-          language: { code: TEMPLATE_LANG },
-          components,
+      Const waRes = await sendWhatsApp({
+        To: phone,
+        Type: "template",
+        Template: {
+          Name: TEMPLATE_NAME,
+          Language: { code: TEMPLATE_LANG },
+          Components,
         },
       });
 
-      console.log("Meta response:", JSON.stringify(waRes.data));
-      await addTags(order.id, ["wa-pending"]);
-      console.log(`Order ${order.name}: WhatsApp bhej diya -> ${phone}`);
+      Console.log("Meta response:", JSON.stringify(waRes.data));
+      Await addTags(order.id, ["wa-pending"]);
+      Console.log(`Order ${order.name}: WhatsApp bhej diya -> ${phone}`);
     } catch (err) {
-      console.error("orders-create error:", err.response?.data || err.message);
+      Console.error("orders-create error:", err.response?.data || err.message);
     }
   }
 );
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+App.use(express.json());
+App.use(express.urlencoded({ extended: false }));
 
 // ---------- Meta webhook: verify ----------
 app.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    return res.status(200).send(challenge);
+  Const mode = req.query["hub.mode"];
+  Const token = req.query["hub.verify_token"];
+  Const challenge = req.query["hub.challenge"];
+  If (mode === "subscribe" && token === VERIFY_TOKEN) {
+    Return res.status(200).send(challenge);
   }
-  res.sendStatus(403);
+  Res.sendStatus(403);
 });
 
 // ---------- Meta webhook: customer replies + delivery status ----------
 app.post("/webhook", async (req, res) => {
-  res.sendStatus(200);
+  Res.sendStatus(200);
 
-  try {
-    const entries = req.body?.entry || [];
-    for (const entry of entries) {
-      for (const change of entry.changes || []) {
-        for (const st of change.value?.statuses || []) {
-          console.log("STATUS:", st.status, JSON.stringify(st.errors || ""));
+  Try {
+    Const entries = req.body?.entry || [];
+    For (const entry of entries) {
+      For (const change of entry.changes || []) {
+        For (const st of change.value?.statuses || []) {
+          Console.log("STATUS:", st.status, JSON.stringify(st.errors || ""));
         }
 
-        const messages = change.value?.messages || [];
-        for (const msg of messages) {
-          const profileName = (change.value?.contacts || []).find(
+        Const messages = change.value?.messages || [];
+        For (const msg of messages) {
+          Const profileName = (change.value?.contacts || []).find(
             (c) => c.wa_id === msg.from
           )?.profile?.name;
-          addMessage(msg.from, "in", describeMessage(msg), profileName);
+          Const textContent = describeMessage(msg);
+          AddMessage(msg.from, "in", textContent, profileName);
 
-          let payload = null;
-          if (msg.type === "button") payload = msg.button?.payload;
-          if (msg.type === "interactive") payload = msg.interactive?.button_reply?.id;
-          if (!payload) continue;
+          Let payload = null;
+          If (msg.type === "button") payload = msg.button?.payload;
+          If (msg.type === "interactive") payload = msg.interactive?.button_reply?.id;
+          
+          If (payload) {
+            Const [action, orderId] = String(payload).split("_");
+            If (!orderId) continue;
 
-          const [action, orderId] = String(payload).split("_");
-          if (!orderId) continue;
-
-          if (action === "CONFIRM") {
-            await addTags(orderId, ["wa-confirmed"]);
-            await removeTags(orderId, ["wa-pending", "wa-cancelled"]);
-            await sendText(
-              msg.from,
-              "Thanks! 🙏✅ Aapka order confirm ho gaya hai.\n\nHum jaldi hi ise dispatch karenge 🚚\nBazoora chunne ke liye dhanyavaad 😊"
-            );
-          } else if (action === "CANCEL") {
-            await addTags(orderId, ["wa-cancelled"]);
-            await removeTags(orderId, ["wa-pending", "wa-confirmed"]);
-            await sendText(
-              msg.from,
-              "Hello! 🙏 Aapka cancel request humne note kar liya hai, aur hamari team jaldi ise process kar degi 😊\n\nUmeed hai future mein hum aapki seva kar paayenge 🛍️✨\nBazoora chunne ke liye Thank you! ❤️"
-            );
+            If (action === "CONFIRM") {
+              Await addTags(orderId, ["wa-confirmed"]);
+              Await removeTags(orderId, ["wa-pending", "wa-cancelled"]);
+              Await sendText(
+                Msg.from,
+                "Thanks! 🙏✅ Aapka order confirm ho gaya hai.\n\nHum jaldi hi ise dispatch karenge 🚚\nBazoora chunne ke liye dhanyavaad 😊"
+              );
+            } else if (action === "CANCEL") {
+              Await addTags(orderId, ["wa-cancelled"]);
+              Await removeTags(orderId, ["wa-pending", "wa-confirmed"]);
+              Await sendText(
+                Msg.from,
+                "Hello! 🙏 Aapka cancel request humne note kar liya hai, aur hamari team jaldi ise process kar degi 😊\n\nUmeed hai future mein hum aapki seva kar paayenge 🛍️✨\nBazoora chunne ke liye Thank you! ❤️"
+              );
+            }
+            Console.log(`Reply: ${action} order ${orderId}`);
+          } else if (msg.type === "text" && GEMINI_API_KEY) {
+            // Agar customer ne normal text message bheja hai toh AI auto-reply karega
+            Const userText = msg.text?.body || "";
+            Const prompt = `You are a helpful customer support chatbot for an e-commerce brand named Bazoora. Reply politely in Hinglish/Hindi to the customer query: "${userText}". Keep it short, friendly, and helpful.`;
+            Const aiReply = await askGemini(prompt);
+            If (aiReply) {
+              Await sendText(msg.from, aiReply.trim());
+              AddMessage(msg.from, "out", aiReply.trim());
+            }
           }
-          console.log(`Reply: ${action} order ${orderId}`);
         }
       }
     }
   } catch (err) {
-    console.error("webhook POST error:", err.response?.data || err.message);
+    Console.error("webhook POST error:", err.response?.data || err.message);
   }
 });
 
 // ---------- Inbox page ----------
 
-function inboxAuth(req, res) {
-  const key = req.query.key || req.body?.key;
-  if (!INBOX_SECRET || key !== INBOX_SECRET) {
-    res.status(403).send("Forbidden");
-    return null;
+Function inboxAuth(req, res) {
+  Const key = req.query.key || req.body?.key;
+  If (!INBOX_SECRET || key !== INBOX_SECRET) {
+    Res.status(403).send("Forbidden");
+    Return null;
   }
-  return key;
+  Return key;
 }
 
-function page(title, body) {
-  return `<!doctype html><html><head><meta charset="utf-8">
+Function page(title, body) {
+  Return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
 <style>
@@ -417,18 +456,18 @@ button{background:#8a2be2;color:#fff;border:0;padding:12px 18px;border-radius:8p
 </style></head><body>${body}</body></html>`;
 }
 
-app.get("/inbox", (req, res) => {
-  const key = inboxAuth(req, res);
-  if (!key) return;
-  const k = encodeURIComponent(key);
-  const phone = req.query.c;
+App.get("/inbox", (req, res) => {
+  Const key = inboxAuth(req, res);
+  If (!key) return;
+  Const k = encodeURIComponent(key);
+  Const phone = req.query.c;
 
-  if (!phone) {
-    const list = [...conversations.entries()]
+  If (!phone) {
+    Const list = [...conversations.entries()]
       .map(([p, c]) => ({ p, c, last: c.messages[c.messages.length - 1] }))
       .filter((x) => x.last)
       .sort((a, b) => b.last.time - a.last.time);
-    const items = list.length
+    Const items = list.length
       ? list
           .map(
             (x) => `<a class="card" href="/inbox?key=${k}&c=${encodeURIComponent(x.p)}">
@@ -438,32 +477,32 @@ app.get("/inbox", (req, res) => {
           )
           .join("")
       : `<div class="card">Abhi koi message nahi aaya.</div>`;
-    return res.send(
-      page(
+    Return res.send(
+      Page(
         "Bazoora Inbox",
         `<div class="top">Bazoora Inbox</div><div class="wrap">${items}</div>`
       )
     );
   }
 
-  const c = conversations.get(phone);
-  if (!c)
-    return res
+  Const c = conversations.get(phone);
+  If (!c)
+    Return res
       .status(404)
       .send(page("Inbox", `<div class="wrap">Chat nahi mili. <a href="/inbox?key=${k}">Wapas</a></div>`));
 
-  const lastIn = [...c.messages].reverse().find((m) => m.dir === "in");
-  const within24 = lastIn && Date.now() - lastIn.time < 24 * 3600 * 1000;
-  const bubbles = c.messages
+  Const lastIn = [...c.messages].reverse().find((m) => m.dir === "in");
+  Const within24 = lastIn && Date.now() - lastIn.time < 24 * 3600 * 1000;
+  Const bubbles = c.messages
     .map((m) => `<div class="msg ${m.dir}">${esc(m.text)}<small>${fmtTime(m.time)}</small></div>`)
     .join("");
-  const err = req.query.err ? `<div class="err">Reply nahi gaya: ${esc(req.query.err)}</div>` : "";
-  const warn = within24
+  Const err = req.query.err ? `<div class="err">Reply nahi gaya: ${esc(req.query.err)}</div>` : "";
+  Const warn = within24
     ? ""
     : `<div class="warn">Customer ke aakhri message ko 24 ghante se zyada ho gaye. Reply shayad na jaye.</div>`;
 
-  res.send(
-    page(
+  Res.send(
+    Page(
       "Chat",
       `<div class="top"><a href="/inbox?key=${k}">&larr; Inbox</a> &nbsp; ${esc(c.name || "Customer")} (+${esc(phone)})</div>
 <div class="wrap">${bubbles}${err}${warn}
@@ -477,23 +516,23 @@ app.get("/inbox", (req, res) => {
   );
 });
 
-app.post("/inbox/reply", async (req, res) => {
-  const key = inboxAuth(req, res);
-  if (!key) return;
-  const k = encodeURIComponent(key);
-  const phone = String(req.body.phone || "");
-  const text = String(req.body.text || "").trim();
-  if (!phone || !text) return res.redirect(303, `/inbox?key=${k}`);
+App.post("/inbox/reply", async (req, res) => {
+  Const key = inboxAuth(req, res);
+  If (!key) return;
+  Const k = encodeURIComponent(key);
+  Const phone = String(req.body.phone || "");
+  Const text = String(req.body.text || "").trim();
+  If (!phone || !text) return res.redirect(303, `/inbox?key=${k}`);
 
-  try {
-    await sendWhatsApp({ to: phone, type: "text", text: { body: text } });
-    addMessage(phone, "out", text);
-    res.redirect(303, `/inbox?key=${k}&c=${encodeURIComponent(phone)}`);
+  Try {
+    Await sendWhatsApp({ to: phone, type: "text", text: { body: text } });
+    AddMessage(phone, "out", text);
+    Res.redirect(303, `/inbox?key=${k}&c=${encodeURIComponent(phone)}`);
   } catch (err) {
-    const e = err.response?.data?.error;
-    const msg = e ? `${e.code}: ${e.message}` : err.message;
-    console.error("inbox reply error:", msg);
-    res.redirect(
+    Const e = err.response?.data?.error;
+    Const msg = e ? `${e.code}: ${e.message}` : err.message;
+    Console.error("inbox reply error:", msg);
+    Res.redirect(
       303,
       `/inbox?key=${k}&c=${encodeURIComponent(phone)}&err=${encodeURIComponent(msg)}`
     );
@@ -503,108 +542,108 @@ app.post("/inbox/reply", async (req, res) => {
 // ---------- Delivery reminder (roz cron-job.org se chalega) ----------
 
 async function runReminders() {
-  if (reminderRunning) {
-    console.log("Reminder check pehle se chal raha hai, ye skip");
-    return;
+  If (reminderRunning) {
+    Console.log("Reminder check pehle se chal raha hai, ye skip");
+    Return;
   }
-  reminderRunning = true;
+  ReminderRunning = true;
 
-  try {
-    const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-    const search = `fulfillment_status:fulfilled -tag:wa-reminded -tag:wa-cancelled created_at:>=${since}`;
-    const q = `query($q: String!) {
-      orders(first: 200, query: $q) {
-        nodes {
-          legacyResourceId
-          name
-          phone
-          customer { firstName phone }
-          shippingAddress { firstName name address1 address2 city province zip phone }
-          fulfillments(first: 5) {
-            createdAt
-            trackingInfo {
-              url
-              number
+  Try {
+    Const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    Const search = `fulfillment_status:fulfilled -tag:wa-reminded -tag:wa-cancelled created_at:>=${since}`;
+    Const q = `query($q: String!) {
+      Orders(first: 200, query: $q) {
+        Nodes {
+          LegacyResourceId
+          Name
+          Phone
+          Customer { firstName phone }
+          ShippingAddress { firstName name address1 address2 city province zip phone }
+          Fulfillments(first: 5) {
+            CreatedAt
+            TrackingInfo {
+              Url
+              Number
             }
           }
         }
       }
     }`;
 
-    const data = await shopifyGraphQL(q, { q: search });
-    const orders = data?.data?.orders?.nodes || [];
-    console.log(`Reminder check: ${orders.length} fulfilled order(s) mile (REMINDER_DAYS=${REMINDER_DAYS})`);
+    Const data = await shopifyGraphQL(q, { q: search });
+    Const orders = data?.data?.orders?.nodes || [];
+    Console.log(`Reminder check: ${orders.length} fulfilled order(s) mile (REMINDER_DAYS=${REMINDER_DAYS})`);
 
-    for (const o of orders) {
-      const orderId = o.legacyResourceId;
-      if (remindedOrders.has(orderId)) continue;
+    For (const o of orders) {
+      Const orderId = o.legacyResourceId;
+      If (remindedOrders.has(orderId)) continue;
 
-      const fulfillments = o.fulfillments || [];
-      const times = fulfillments.map((f) => new Date(f.createdAt).getTime());
-      if (!times.length) continue;
-      const days = (Date.now() - Math.min(...times)) / 86400000;
-      if (days < REMINDER_DAYS) continue;
+      Const fulfillments = o.fulfillments || [];
+      Const times = fulfillments.map((f) => new Date(f.createdAt).getTime());
+      If (!times.length) continue;
+      Const days = (Date.now() - Math.min(...times)) / 86400000;
+      If (days < REMINDER_DAYS) continue;
 
-      const phone = cleanPhone(
-        o.shippingAddress?.phone || o.phone || o.customer?.phone
+      Const phone = cleanPhone(
+        O.shippingAddress?.phone || o.phone || o.customer?.phone
       );
-      if (!phone) {
-        console.warn(`Reminder ${o.name}: phone nahi mila`);
-        remindedOrders.add(orderId);
-        await addTags(orderId, ["wa-reminded", "wa-no-phone"]);
-        continue;
+      If (!phone) {
+        Console.warn(`Reminder ${o.name}: phone nahi mila`);
+        RemindedOrders.add(orderId);
+        Await addTags(orderId, ["wa-reminded", "wa-no-phone"]);
+        Continue;
       }
 
       // Shopify fulfillment se tracking URL detect karna
-      const validFulfillment = fulfillments.find((f) => f.trackingInfo && f.trackingInfo.url);
-      const trackingUrl = validFulfillment?.trackingInfo?.url || "Tracking link available nahi";
+      Const validFulfillment = fulfillments.find((f) => f.trackingInfo && f.trackingInfo.url);
+      Const trackingUrl = validFulfillment?.trackingInfo?.url || "Tracking link available nahi";
 
-      remindedOrders.add(orderId);
-      try {
-        const name = cleanText(
-          o.shippingAddress?.firstName || o.customer?.firstName || "Customer",
+      RemindedOrders.add(orderId);
+      Try {
+        Const name = cleanText(
+          O.shippingAddress?.firstName || o.customer?.firstName || "Customer",
           60
         );
-        const waRes = await sendWhatsApp({
-          to: phone,
-          type: "template",
-          template: {
-            name: REMINDER_TEMPLATE,
-            language: { code: REMINDER_LANG },
-            components: [
+        Const waRes = await sendWhatsApp({
+          To: phone,
+          Type: "template",
+          Template: {
+            Name: REMINDER_TEMPLATE,
+            Language: { code: REMINDER_LANG },
+            Components: [
               {
-                type: "body",
-                parameters: [
+                Type: "body",
+                Parameters: [
                   { type: "text", text: name },
                   { type: "text", text: String(o.name) },
                   { type: "text", text: formatAddress(o.shippingAddress) },
-                  { type: "text", text: trackingUrl }, // {{4}} me tracking link jayega
+                  { type: "text", text: trackingUrl },
                 ],
               },
             ],
           },
         });
-        console.log("Reminder Meta response:", JSON.stringify(waRes.data));
-        await addTags(orderId, ["wa-reminded"]);
-        console.log(`Reminder bheja: ${o.name} -> ${phone}`);
+        Console.log("Reminder Meta response:", JSON.stringify(waRes.data));
+        Await addTags(orderId, ["wa-reminded"]);
+        Console.log(`Reminder bheja: ${o.name} -> ${phone}`);
       } catch (err) {
-        remindedOrders.delete(orderId);
-        console.error(`Reminder error ${o.name}:`, JSON.stringify(err.response?.data || err.message));
+        RemindedOrders.delete(orderId);
+        Console.error(`Reminder error ${o.name}:`, JSON.stringify(err.response?.data || err.message));
       }
     }
   } finally {
-    reminderRunning = false;
+    ReminderRunning = false;
   }
 }
 
-app.get("/cron/reminders", (req, res) => {
-  if (!CRON_SECRET || req.query.key !== CRON_SECRET) {
-    return res.status(403).send("Forbidden");
+App.get("/cron/reminders", (req, res) => {
+  If (!CRON_SECRET || req.query.key !== CRON_SECRET) {
+    Return res.status(403).send("Forbidden");
   }
-  res.status(200).send("Reminder check shuru ho gaya");
-  runReminders().catch((err) => {
-    reminderRunning = false;
-    console.error("runReminders error:", err.response?.data || err.message);
+  Res.status(200).send("Reminder check shuru ho gaya");
+  RunReminders().catch((err) => {
+    ReminderRunning = false;
+    Console.error("runReminders error:", err.response?.data || err.message);
   });
 });
 
