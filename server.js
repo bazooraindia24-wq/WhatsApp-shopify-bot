@@ -35,6 +35,7 @@ const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 3);
 // AI customer auto-reply: default BAND (chalu karna ho to Render me AI_REPLY=on)
 const AI_REPLY = process.env.AI_REPLY === "on";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || "gemini-3.6-flash";
 
 // ---------- AI Support: store ki jaankari ----------
 // Ye default jaankari hai. Render me STORE_INFO naam ka variable banaoge to wo isse upar chalega.
@@ -112,28 +113,43 @@ async function askGemini(promptText) {
 }
 
 // Customer support ke liye: system prompt + pichli baatcheet (history) ke saath
+// Gemini busy (503/429) ho to dobara try karta hai, phir dusre model se
 async function askGeminiChat(systemText, contents) {
   if (!GEMINI_API_KEY) return null;
-  try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-    const res = await axios.post(
-      url,
-      {
-        systemInstruction: { parts: [{ text: systemText }] },
-        contents,
-        generationConfig: { temperature: 0.4, maxOutputTokens: 1024 },
-      },
-      { timeout: 20000 }
-    );
-    return res.data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
-  } catch (err) {
-    console.error(
-      "Gemini chat error:",
-      err.response?.status,
-      err.response?.data?.error?.message || err.message
-    );
-    return null;
+  const models = [GEMINI_MODEL];
+  if (GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== GEMINI_MODEL) models.push(GEMINI_FALLBACK_MODEL);
+
+  for (const model of models) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+        const res = await axios.post(
+          url,
+          {
+            systemInstruction: { parts: [{ text: systemText }] },
+            contents,
+            generationConfig: { temperature: 0.4, maxOutputTokens: 1024 },
+          },
+          { timeout: 20000 }
+        );
+        const text = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) return text;
+        console.error(`Gemini chat (${model}): khali jawab aaya`);
+        break;
+      } catch (err) {
+        const status = err.response?.status;
+        console.error(
+          `Gemini chat error (${model}, try ${attempt}):`,
+          status,
+          err.response?.data?.error?.message || err.message
+        );
+        const busy = !status || [429, 500, 503, 504].includes(status);
+        if (!busy) break;
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 2500));
+      }
+    }
   }
+  return null;
 }
 
 // ---------- Inbox storage ----------
@@ -341,6 +357,8 @@ async function handleAiReply(msg) {
   const aiReply = await askGeminiChat(buildSystemPrompt(productsText, ordersText), contents);
   if (!aiReply) {
     markNeedsHuman(phone, true);
+    await sendText(phone, HUMAN_HANDOFF_TEXT);
+    addMessage(phone, "out", HUMAN_HANDOFF_TEXT);
     return;
   }
 
@@ -525,7 +543,7 @@ app.post(
                 : "";
             return `${i.quantity}x ${i.title}${v}`;
           })
-          .join(", "),
+         .join(", "),
         300
       );
 
@@ -554,7 +572,7 @@ app.post(
           sub_type: "quick_reply",
           index: "1",
           parameters: [{ type: "payload", payload: `CANCEL_${order.id}` }],
-   },
+        },
       ];
 
       if (imageUrl) {
@@ -882,4 +900,4 @@ app.get("/cron/reminders", (req, res) => {
 app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
 
 app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
-        
+      
