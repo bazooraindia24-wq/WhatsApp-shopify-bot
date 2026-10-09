@@ -83,7 +83,7 @@ const HUMAN_HANDOFF_TEXT =
   "Aapka message humne hamari team ko bhej diya hai 🙏 Woh jaldi hi aapse contact karegi 😊";
 
 // AI spam/loop se bachne ke liye: ek customer ko 1 ghante me max itne AI reply
-const AI_MAX_PER_HOUR = Number(process.env.AI_MAX_PER_HOUR ?? 10);
+const AI_MAX_PER_HOUR = Number(process.env.AI_MAX_PER_HOUR ?? 20);
 const aiUsage = new Map();
 
 const processedOrders = new Set();
@@ -94,22 +94,28 @@ let reminderRunning = false;
 
 async function askGemini(promptText) {
   if (!GEMINI_API_KEY) return null;
-  try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-    const res = await axios.post(
-      url,
-      { contents: [{ parts: [{ text: promptText }] }] },
-      { timeout: 15000 }
-    );
-    return res.data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
-  } catch (err) {
-    console.error(
-      "Gemini API error:",
-      err.response?.status,
-      err.response?.data?.error?.message || err.message
-    );
-    return null;
+  const models = [GEMINI_MODEL];
+  if (GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== GEMINI_MODEL) models.push(GEMINI_FALLBACK_MODEL);
+
+  for (const model of models) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+      const res = await axios.post(
+        url,
+        { contents: [{ parts: [{ text: promptText }] }] },
+        { timeout: 20000 }
+      );
+      const text = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) return text;
+    } catch (err) {
+      console.error(
+        `Gemini API error (${model}):`,
+        err.response?.status,
+        err.response?.data?.error?.message || err.message
+      );
+    }
   }
+  return null;
 }
 
 // Customer support ke liye: system prompt + pichli baatcheet (history) ke saath
@@ -134,7 +140,7 @@ async function askGeminiChat(systemText, contents) {
               thinkingConfig: { thinkingLevel: "low" },
             },
           },
-          { timeout: 12000 }
+          { timeout: 20000 }
         );
         const text = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (text) return text;
@@ -218,14 +224,21 @@ function fmtTime(t) {
 
 // ---------- AI Support helpers ----------
 
+// true = reply do, "notify" = limit abhi lagi (customer ko ek baar batao), false = chup raho
 function aiAllowed(phone) {
   const now = Date.now();
   const u = aiUsage.get(phone);
   if (!u || now - u.start > 3600 * 1000) {
-    aiUsage.set(phone, { start: now, count: 1 });
+    aiUsage.set(phone, { start: now, count: 1, notified: false });
     return true;
   }
-  if (u.count >= AI_MAX_PER_HOUR) return false;
+  if (u.count >= AI_MAX_PER_HOUR) {
+    if (!u.notified) {
+      u.notified = true;
+      return "notify";
+    }
+    return false;
+  }
   u.count++;
   return true;
 }
@@ -347,9 +360,14 @@ async function getCustomerOrdersText(phone) {
 
 async function handleAiReply(msg) {
   const phone = msg.from;
-  if (!aiAllowed(phone)) {
+  const allowed = aiAllowed(phone);
+  if (allowed !== true) {
     console.log(`AI limit: ${phone} ko is ghante aur reply nahi`);
     markNeedsHuman(phone, true);
+    if (allowed === "notify") {
+      await sendText(phone, HUMAN_HANDOFF_TEXT);
+      addMessage(phone, "out", HUMAN_HANDOFF_TEXT);
+    }
     return;
   }
 
@@ -409,6 +427,67 @@ function formatAddress(a) {
 function formatTotal(order) {
   const symbol = order.currency === "INR" ? "₹" : order.currency + " ";
   return `${symbol}${order.total_price}`;
+}
+
+// ---------- Address verify (pincode check + AI) ----------
+
+// India Post ki free pincode API: pincode asli hai ya nahi, aur kis state/district ka hai
+// found:true/false deta hai; API na chale to null (tab tag nahi lagta)
+async function lookupPincode(pin) {
+  try {
+    const res = await axios.get(`https://api.postalpincode.in/pincode/${pin}`, { timeout: 8000 });
+    const d = Array.isArray(res.data) ? res.data[0] : null;
+    if (d?.Status === "Success" && d.PostOffice?.length) {
+      return {
+        found: true,
+        state: d.PostOffice[0].State || "",
+        district: d.PostOffice[0].District || "",
+        areas: d.PostOffice.slice(0, 5).map((p) => p.Name).join(", "),
+      };
+    }
+    if (d?.Status === "Error" || d?.Status === "404") return { found: false };
+    return null;
+  } catch (err) {
+    console.error("pincode lookup error:", err.message);
+    return null;
+  }
+}
+
+function normState(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z]/g, "");
+}
+
+// Returns { problems: [..], pinInfo }
+async function checkAddress(addr) {
+  const problems = [];
+  let pinInfo = null;
+
+  if (!addr) {
+    problems.push("shipping address nahi hai");
+    return { problems, pinInfo };
+  }
+  if (!cleanText(addr.address1) || cleanText(addr.address1).length < 4) problems.push("address line bahut chhoti/khali");
+  if (!cleanText(addr.city)) problems.push("city nahi hai");
+
+  const pin = String(addr.zip || "").replace(/\s/g, "");
+  if (!/^[1-9]\d{5}$/.test(pin)) {
+    problems.push("pincode ka format galat");
+  } else {
+    pinInfo = await lookupPincode(pin);
+    if (pinInfo?.found === false) {
+      problems.push("pincode exist nahi karta");
+    } else if (pinInfo?.found && addr.province) {
+      const a = normState(addr.province);
+      const b = normState(pinInfo.state);
+      if (a && b && !a.includes(b) && !b.includes(a)) {
+        problems.push(`pincode ${pin} ${pinInfo.state} ka hai, address me ${addr.province} likha hai`);
+      }
+    }
+  }
+  return { problems, pinInfo };
 }
 
 let cachedToken = null;
@@ -544,7 +623,7 @@ app.post(
         (order.line_items || [])
           .map((i) => {
             const v =
-    i.variant_title && i.variant_title !== "Default Title"
+              i.variant_title && i.variant_title !== "Default Title"
                 ? ` - ${i.variant_title}`
                 : "";
             return `${i.quantity}x ${i.title}${v}`;
@@ -603,17 +682,34 @@ app.post(
       await addTags(order.id, ["wa-pending"]);
       console.log(`Order ${order.name}: WhatsApp bhej diya -> ${phone}`);
 
-      // Uske baad AI address check: sirf aapke liye tag, customer ko kuch nahi jata
-      if (GEMINI_API_KEY) {
-        const aiRes = await askGemini(
-          `You check Indian e-commerce shipping addresses. Address: "${address}". Look for obvious problems only: missing city, state and pincode mismatch, or gibberish and test text. A missing or generic house number is acceptable in India, because many villages have no house numbers; a landmark or locality name is enough. If it looks acceptable reply only "OK". Otherwise reply "CHECK" followed by a very short reason.`
-        );
-        if (aiRes && !aiRes.trim().toUpperCase().startsWith("OK")) {
-          console.log(`Order ${order.name}: address check: ${aiRes.trim().slice(0, 150)}`);
+      // Uske baad address check: sirf aapke liye tag, customer ko kuch nahi jata
+      try {
+        const { problems, pinInfo } = await checkAddress(order.shipping_address);
+
+        let aiNote = "";
+        if (GEMINI_API_KEY && !problems.length) {
+          const pinLine = pinInfo?.found
+            ? `Pincode lookup (India Post) says this pincode belongs to district "${pinInfo.district}", state "${pinInfo.state}", areas: ${pinInfo.areas}. If the city or locality in the address clearly does not belong to that district/state, reply CHECK.`
+            : "";
+          const aiRes = await askGemini(
+            `You check Indian e-commerce shipping addresses. Address: "${address}". ${pinLine} Look for obvious problems only: missing city, state and pincode mismatch, city that does not match the pincode, or gibberish and test text. A missing or generic house number is acceptable in India, because many villages have no house numbers; a landmark or locality name is enough. If it looks acceptable reply only "OK". Otherwise reply "CHECK" followed by a very short reason.`
+          );
+          if (!aiRes) {
+            console.warn(`Order ${order.name}: AI address check nahi ho paya (Gemini jawab nahi diya)`);
+          } else if (!aiRes.trim().toUpperCase().startsWith("OK")) {
+            aiNote = aiRes.trim().slice(0, 150);
+            problems.push(`AI: ${aiNote}`);
+          }
+        }
+
+        if (problems.length) {
+          console.log(`Order ${order.name}: address check: ${problems.join(" | ")}`);
           await addTags(order.id, ["wa-check-address"]);
-        } else if (aiRes) {
+        } else {
           console.log(`Order ${order.name}: address OK`);
         }
+      } catch (err) {
+        console.error("address check error:", err.response?.data || err.message);
       }
     } catch (err) {
       console.error("orders-create error:", err.response?.data || err.message);
@@ -906,4 +1002,3 @@ app.get("/cron/reminders", (req, res) => {
 app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
 
 app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
-        
