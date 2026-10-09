@@ -34,7 +34,7 @@ const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 3);
 
 // AI customer auto-reply: default BAND (chalu karna ho to Render me AI_REPLY=on)
 const AI_REPLY = process.env.AI_REPLY === "on";
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
 // ---------- AI Support: store ki jaankari ----------
 // Ye default jaankari hai. Render me STORE_INFO naam ka variable banaoge to wo isse upar chalega.
@@ -121,7 +121,7 @@ async function askGeminiChat(systemText, contents) {
       {
         systemInstruction: { parts: [{ text: systemText }] },
         contents,
-        generationConfig: { temperature: 0.4, maxOutputTokens: 300 },
+        generationConfig: { temperature: 0.4, maxOutputTokens: 1024 },
       },
       { timeout: 20000 }
     );
@@ -554,7 +554,7 @@ app.post(
           sub_type: "quick_reply",
           index: "1",
           parameters: [{ type: "payload", payload: `CANCEL_${order.id}` }],
-    },
+   },
       ];
 
       if (imageUrl) {
@@ -882,4 +882,4 @@ app.get("/cron/reminders", (req, res) => {
 app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
 
 app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
-    
+        
