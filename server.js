@@ -429,24 +429,97 @@ function formatTotal(order) {
   return `${symbol}${order.total_price}`;
 }
 
-// ---------- Address verify (pincode check + AI) ----------
+// ---------- Address verify (bina AI: pincode + fuzzy match) ----------
 
-// India Post ki free pincode API: pincode asli hai ya nahi, aur kis state/district ka hai
+// Hinglish spelling ka farak hatane ke liye (Muhalla/Mohalla, Jaipur/Jeypur)
+function normText(s = "") {
+  return String(s)
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0900-\u097f ]/g, " ")
+    .replace(/\b(dist|distt|district|zila|jila|tehsil|tahsil|teh|post|po|village|vill|gram|gaon|gav|ps|thana)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function phon(s = "") {
+  return normText(s)
+    .replace(/w/g, "v")
+    .replace(/z/g, "j")
+    .replace(/ph/g, "f")
+    .replace(/sh/g, "s")
+    .replace(/kh/g, "k")
+    .replace(/gh/g, "g")
+    .replace(/th/g, "t")
+    .replace(/dh/g, "d")
+    .replace(/bh/g, "b")
+    .replace(/ch/g, "c")
+    .replace(/[aeiouy]+/g, "a")
+    .replace(/(.)\1+/g, "$1")
+    .replace(/h/g, "");
+}
+
+function lev(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  const d = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+  for (let j = 0; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      d[i][j] = Math.min(
+        d[i - 1][j] + 1,
+        d[i][j - 1] + 1,
+        d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+  return d[m][n];
+}
+
+function sim(a, b) {
+  const x = phon(a), y = phon(b);
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  if (Math.min(x.length, y.length) >= 4 && (x.includes(y) || y.includes(x))) return 0.9;
+  return 1 - lev(x, y) / Math.max(x.length, y.length);
+}
+
+// Kya ye naam (district / village / post office) address ke text me kahin bhi likha hai?
+function foundInText(needle, text) {
+  const n = phon(needle), t = phon(text);
+  if (!n || !t || n.length < 3) return false;
+  if (t.includes(n)) return true;
+  const words = t.split(" ");
+  const nw = n.split(" ").length;
+  for (let i = 0; i + nw <= words.length; i++) {
+    const chunk = words.slice(i, i + nw).join(" ");
+    if (chunk.length >= 4 && sim(chunk, n) >= 0.8) return true;
+  }
+  return false;
+}
+
+const pinCache = new Map();
+
+// India Post ki free pincode API: pincode asli hai ya nahi, aur kis state/district/area ka hai
 // found:true/false deta hai; API na chale to null (tab tag nahi lagta)
 async function lookupPincode(pin) {
+  if (pinCache.has(pin)) return pinCache.get(pin);
   try {
     const res = await axios.get(`https://api.postalpincode.in/pincode/${pin}`, { timeout: 8000 });
     const d = Array.isArray(res.data) ? res.data[0] : null;
+    let out = null;
     if (d?.Status === "Success" && d.PostOffice?.length) {
-      return {
+      out = {
         found: true,
         state: d.PostOffice[0].State || "",
         district: d.PostOffice[0].District || "",
+        districts: [...new Set(d.PostOffice.map((p) => p.District).filter(Boolean))],
+        names: d.PostOffice.map((p) => p.Name).filter(Boolean),
         areas: d.PostOffice.slice(0, 5).map((p) => p.Name).join(", "),
       };
+    } else if (d?.Status === "Error" || d?.Status === "404") {
+      out = { found: false };
     }
-    if (d?.Status === "Error" || d?.Status === "404") return { found: false };
-    return null;
+    if (out) pinCache.set(pin, out);
+    return out;
   } catch (err) {
     console.error("pincode lookup error:", err.message);
     return null;
@@ -460,34 +533,65 @@ function normState(s) {
     .replace(/[^a-z]/g, "");
 }
 
-// Returns { problems: [..], pinInfo }
+// Returns { problems: [..], pinInfo, unknown }
+// unknown = true => pincode API chali nahi, isliye verify nahi ho paya (koi tag nahi lagega)
 async function checkAddress(addr) {
   const problems = [];
   let pinInfo = null;
 
   if (!addr) {
     problems.push("shipping address nahi hai");
-    return { problems, pinInfo };
+    return { problems, pinInfo, unknown: false };
   }
-  if (!cleanText(addr.address1) || cleanText(addr.address1).length < 4) problems.push("address line bahut chhoti/khali");
+
+  // 1. Country
+  const country = String(addr.country_code || addr.country || "").trim();
+  if (country && !/^(in|india|bharat)$/i.test(country)) problems.push("country India nahi hai");
+
+  // 2. Address line: ghar number zaroori nahi, par kuch locality/mohalla/landmark text hona chahiye
+  const line = cleanText([addr.address1, addr.address2].filter(Boolean).join(" "));
+  if (line.length < 4) problems.push("address line bahut chhoti/khali");
+  else if (!/[a-z\u0900-\u097f]{3,}/i.test(line)) problems.push("address me mohalla/gaon/landmark nahi, sirf number hai");
+
+  // 3. City
   if (!cleanText(addr.city)) problems.push("city nahi hai");
 
+  // 4. Pincode
   const pin = String(addr.zip || "").replace(/\s/g, "");
   if (!/^[1-9]\d{5}$/.test(pin)) {
     problems.push("pincode ka format galat");
-  } else {
-    pinInfo = await lookupPincode(pin);
-    if (pinInfo?.found === false) {
-      problems.push("pincode exist nahi karta");
-    } else if (pinInfo?.found && addr.province) {
-      const a = normState(addr.province);
-      const b = normState(pinInfo.state);
-      if (a && b && !a.includes(b) && !b.includes(a)) {
-        problems.push(`pincode ${pin} ${pinInfo.state} ka hai, address me ${addr.province} likha hai`);
-      }
-    }
+    return { problems, pinInfo, unknown: false };
   }
-  return { problems, pinInfo };
+
+  pinInfo = await lookupPincode(pin);
+  if (!pinInfo) return { problems, pinInfo, unknown: true };
+  if (pinInfo.found === false) {
+    problems.push("pincode exist nahi karta");
+    return { problems, pinInfo, unknown: false };
+  }
+
+  // 5. State (pincode ke state se match)
+  if (addr.province) {
+    const a = normState(addr.province);
+    const b = normState(pinInfo.state);
+    const stateOk = (a && b && (a.includes(b) || b.includes(a))) || sim(addr.province, pinInfo.state) >= 0.8;
+    if (!stateOk) problems.push(`pincode ${pin} ${pinInfo.state} ka hai, address me ${addr.province} likha hai`);
+  } else {
+    problems.push("state nahi hai");
+  }
+
+  // 6. District / village / mohalla: pincode ke district ya post office ka naam
+  //    city ya address me kahin bhi mil jaye to theek hai
+  const fullText = [addr.address1, addr.address2, addr.city].filter(Boolean).join(" ");
+  const candidates = [...(pinInfo.districts || []), ...(pinInfo.names || [])];
+  const areaOk = candidates.some((n) => foundInText(n, fullText) || sim(n, addr.city || "") >= 0.75);
+  if (!areaOk) {
+    problems.push(
+      `district/gaon pincode se match nahi (pincode ka district: ${pinInfo.district}, area: ${(pinInfo.names || []).slice(0, 4).join(", ")})`
+    );
+  }
+
+  return { problems, pinInfo, unknown: false };
 }
 
 let cachedToken = null;
@@ -667,7 +771,7 @@ app.post(
         });
       }
 
-      // Pehle customer ko message (AI ki wajah se der na ho)
+      // Pehle customer ko message (der na ho)
       const waRes = await sendWhatsApp({
         to: phone,
         type: "template",
@@ -682,31 +786,20 @@ app.post(
       await addTags(order.id, ["wa-pending"]);
       console.log(`Order ${order.name}: WhatsApp bhej diya -> ${phone}`);
 
-      // Uske baad address check: sirf aapke liye tag, customer ko kuch nahi jata
+      // Uske baad address check (bina AI): sirf aapke liye tag, customer ko kuch nahi jata
+      //   sahi  -> wa-address-ok
+      //   galat -> wa-check-address
       try {
-        const { problems, pinInfo } = await checkAddress(order.shipping_address);
-
-        let aiNote = "";
-        if (GEMINI_API_KEY && !problems.length) {
-          const pinLine = pinInfo?.found
-            ? `Pincode lookup (India Post) says this pincode belongs to district "${pinInfo.district}", state "${pinInfo.state}", areas: ${pinInfo.areas}. If the city or locality in the address clearly does not belong to that district/state, reply CHECK.`
-            : "";
-          const aiRes = await askGemini(
-            `You check Indian e-commerce shipping addresses. Address: "${address}". ${pinLine} Look for obvious problems only: missing city, state and pincode mismatch, city that does not match the pincode, or gibberish and test text. A missing or generic house number is acceptable in India, because many villages have no house numbers; a landmark or locality name is enough. If it looks acceptable reply only "OK". Otherwise reply "CHECK" followed by a very short reason.`
-          );
-          if (!aiRes) {
-            console.warn(`Order ${order.name}: AI address check nahi ho paya (Gemini jawab nahi diya)`);
-          } else if (!aiRes.trim().toUpperCase().startsWith("OK")) {
-            aiNote = aiRes.trim().slice(0, 150);
-            problems.push(`AI: ${aiNote}`);
-          }
-        }
+        const { problems, unknown } = await checkAddress(order.shipping_address);
 
         if (problems.length) {
           console.log(`Order ${order.name}: address check: ${problems.join(" | ")}`);
           await addTags(order.id, ["wa-check-address"]);
+        } else if (unknown) {
+          console.warn(`Order ${order.name}: pincode API chali nahi, address verify nahi hua`);
         } else {
           console.log(`Order ${order.name}: address OK`);
+          await addTags(order.id, ["wa-address-ok"]);
         }
       } catch (err) {
         console.error("address check error:", err.response?.data || err.message);
@@ -1002,3 +1095,4 @@ app.get("/cron/reminders", (req, res) => {
 app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
 
 app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
+                     
