@@ -545,7 +545,7 @@ async function checkAddress(addr) {
   }
 
   // 1. Country
-  const country = String(addr.country_code || addr.country || "").trim();
+  const country = String(addr.country_code || addr.country  || "").trim();
   if (country && !/^(in|india|bharat)$/i.test(country)) problems.push("country India nahi hai");
 
   // 2. Address line: ghar number zaroori nahi, par kuch locality/mohalla/landmark text hona chahiye
@@ -580,18 +580,21 @@ async function checkAddress(addr) {
     problems.push("state nahi hai");
   }
 
-  // 6. District / village / mohalla: pincode ke district ya post office ka naam
-  //    city ya address me kahin bhi mil jaye to theek hai
-  const fullText = [addr.address1, addr.address2, addr.city].filter(Boolean).join(" ");
-  const candidates = [...(pinInfo.districts || []), ...(pinInfo.names || [])];
-  const areaOk = candidates.some((n) => foundInText(n, fullText) || sim(n, addr.city || "") >= 0.75);
-  if (!areaOk) {
-    problems.push(
-      `district/gaon pincode se match nahi (pincode ka district: ${pinInfo.district}, area: ${(pinInfo.names || []).slice(0, 4).join(", ")})`
-    );
+  // 6. City: sirf halka warning (address galat nahi maante, customer se galti ho sakti hai)
+  //    city pincode ke district ya kisi post office ke naam se na mile to warning
+  const warnings = [];
+  const cityTxt = cleanText(addr.city);
+  if (cityTxt) {
+    const candidates = [...(pinInfo.districts || []), ...(pinInfo.names || [])];
+    const cityOk = candidates.some((n) => sim(n, cityTxt) >= 0.75 || foundInText(n, cityTxt));
+    if (!cityOk) {
+      warnings.push(
+        `city "${cityTxt}" pincode se match nahi (district: ${pinInfo.district}, area: ${(pinInfo.names || []).slice(0, 4).join(", ")})`
+      );
+    }
   }
 
-  return { problems, pinInfo, unknown: false };
+  return { problems, warnings, pinInfo, unknown: false };
 }
 
 let cachedToken = null;
@@ -790,7 +793,7 @@ app.post(
       //   sahi  -> wa-address-ok
       //   galat -> wa-check-address
       try {
-        const { problems, unknown } = await checkAddress(order.shipping_address);
+        const { problems, warnings = [], unknown } = await checkAddress(order.shipping_address);
 
         if (problems.length) {
           console.log(`Order ${order.name}: address check: ${problems.join(" | ")}`);
@@ -800,6 +803,10 @@ app.post(
         } else {
           console.log(`Order ${order.name}: address OK`);
           await addTags(order.id, ["wa-address-ok"]);
+          if (warnings.length) {
+            console.log(`Order ${order.name}: city warning: ${warnings.join(" | ")}`);
+            await addTags(order.id, ["wa-city-check"]);
+          }
         }
       } catch (err) {
         console.error("address check error:", err.response?.data || err.message);
@@ -1095,4 +1102,4 @@ app.get("/cron/reminders", (req, res) => {
 app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
 
 app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
-                     
+  
