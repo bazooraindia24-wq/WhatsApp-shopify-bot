@@ -32,6 +32,37 @@ const REMINDER_LANG = "en";
 // Fulfill ke kitne din baad reminder (default 3)
 const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 3);
 
+// ---------- Naye settings (sab Render ke Environment me badal sakte ho, code nahi) ----------
+// MongoDB: inbox ke messages deploy ke baad bhi bache rahein
+const MONGODB_URI = (process.env.MONGODB_URI || "").trim();
+const MONGODB_DB = (process.env.MONGODB_DB || "bazoora").trim();
+
+// COD freeze: is amount se zyada ke COD order par (address problem ho to) COD band
+const COD_LIMIT = Number(process.env.COD_LIMIT ?? 2000);
+const UPI_ID = (process.env.UPI_ID || "").trim();
+const COD_TEMPLATE = process.env.COD_TEMPLATE || "cod_blocked";
+const COD_TEMPLATE_LANG = process.env.COD_TEMPLATE_LANG || "en";
+// Testing ke liye: on karoge to bina payment gateway wale pending (manual) orders ko COD maana jayega
+const COD_TEST_MODE = process.env.COD_TEST_MODE === "on";
+
+// High RTO pincodes: comma se alag, jaise 444705,444601 (Render me RTO_PINCODES me badlo)
+const RTO_PINCODES = new Set(
+  String(process.env.RTO_PINCODES || "")
+    .split(/[,\s]+/)
+    .filter((p) => /^\d{6}$/.test(p))
+);
+
+// High-risk flag: itne ya zyada points hone par wa-high-risk tag
+const HIGH_RISK_SCORE = Number(process.env.HIGH_RISK_SCORE ?? 50);
+const RISK_POINTS = {
+  addressProblem: 30, // address check me problem
+  codHigh: 25, // COD aur amount COD_LIMIT se zyada
+  rtoPincode: 30, // pincode RTO list me
+  manyOrders: 30, // 24 ghante me 3 ya zyada orders ek hi phone se
+  prevCancelled: 30, // pehle ka order cancel hua
+  prevRto: 40, // pehle ka parcel wapas aaya (order par rto tag)
+};
+
 // AI customer auto-reply: default BAND (chalu karna ho to Render me AI_REPLY=on)
 const AI_REPLY = process.env.AI_REPLY === "on";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
@@ -169,31 +200,135 @@ async function askGeminiChat(systemText, contents) {
 const INBOX_FILE = "inbox-data.json";
 const conversations = new Map();
 
+// MongoDB na ho (ya connect na ho) to purani tarah file me save hota hai (deploy par ud jata hai)
+let db = null;
+
 try {
   const saved = JSON.parse(fs.readFileSync(INBOX_FILE, "utf8"));
   for (const [k, v] of Object.entries(saved)) conversations.set(k, v);
 } catch (e) {}
 
-let saveTimer = null;
-function saveInbox() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try {
-      fs.writeFileSync(INBOX_FILE, JSON.stringify(Object.fromEntries(conversations)));
-    } catch (e) {}
-  }, 1000);
+async function initDb() {
+  if (!MONGODB_URI) {
+    console.warn("MONGODB_URI set nahi hai: inbox messages deploy par hat jayenge");
+    return;
+  }
+  const { MongoClient } = require("mongodb");
+  const client = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
+  await client.connect();
+  db = client.db(MONGODB_DB);
+
+  const docs = await db.collection("conversations").find({}).toArray();
+  conversations.clear();
+  for (const d of docs) {
+    conversations.set(String(d._id), {
+      name: d.name || "",
+      needsHuman: !!d.needsHuman,
+      messages: Array.isArray(d.messages) ? d.messages : [],
+    });
+  }
+  // 90 din purane "order dekh liya" record apne aap hat jayenge
+  await db.collection("orders_seen").createIndex({ createdAt: 1 }, { expireAfterSeconds: 90 * 86400 });
+  console.log(`MongoDB connected: ${docs.length} chat(s) load hui`);
 }
 
-function addMessage(phone, dir, text, name) {
+const saveTimers = new Map();
+
+function saveInboxFile() {
+  try {
+    fs.writeFileSync(INBOX_FILE, JSON.stringify(Object.fromEntries(conversations)));
+  } catch (e) {}
+}
+
+async function persistConversation(phone) {
+  clearTimeout(saveTimers.get(phone));
+  saveTimers.delete(phone);
+  const c = conversations.get(phone);
+  if (!c) return;
+  if (!db) {
+    saveInboxFile();
+    return;
+  }
+  try {
+    await db.collection("conversations").replaceOne(
+      { _id: phone },
+      { _id: phone, name: c.name || "", needsHuman: !!c.needsHuman, messages: c.messages, updatedAt: new Date() },
+      { upsert: true }
+    );
+  } catch (err) {
+    console.error("MongoDB save error:", err.message);
+  }
+}
+
+function queueSave(phone) {
+  clearTimeout(saveTimers.get(phone));
+  saveTimers.set(
+    phone,
+    setTimeout(() => persistConversation(phone), 500)
+  );
+}
+
+// Deploy (SIGTERM) par pending messages save karke band ho
+let shuttingDown = false;
+async function flushAndExit() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    await Promise.race([
+      Promise.all([...saveTimers.keys()].map((p) => persistConversation(p))),
+      new Promise((r) => setTimeout(r, 4000)),
+    ]);
+  } catch (e) {}
+  process.exit(0);
+}
+process.on("SIGTERM", flushAndExit);
+process.on("SIGINT", flushAndExit);
+
+// true = naya order, false = pehle dekh chuke (webhook dobara aaya ya deploy ke baad retry)
+async function claimOrder(orderId) {
+  const key = String(orderId);
+  if (processedOrders.has(key)) return false;
+  processedOrders.add(key);
+  if (db) {
+    try {
+      await db.collection("orders_seen").insertOne({ _id: key, createdAt: new Date() });
+    } catch (err) {
+      if (err.code === 11000) return false;
+      console.error("orders_seen error:", err.message);
+    }
+  }
+  return true;
+}
+
+function addMessage(phone, dir, text, name, media) {
   let c = conversations.get(phone);
   if (!c) {
     c = { name: "", messages: [] };
     conversations.set(phone, c);
   }
   if (name) c.name = name;
-  c.messages.push({ dir, text: String(text).slice(0, 2000), time: Date.now() });
+  const m = { dir, text: String(text).slice(0, 2000), time: Date.now() };
+  if (media) m.media = media;
+  c.messages.push(m);
   if (c.messages.length > 200) c.messages = c.messages.slice(-200);
-  saveInbox();
+  queueSave(phone);
+}
+
+const MEDIA_TYPES = ["image", "video", "audio", "document", "sticker"];
+const MEDIA_LABELS = { image: "Photo", video: "Video", audio: "Audio", document: "Document", sticker: "Sticker" };
+
+// Customer ne photo/video/audio/document bheja ho to uski ID nikalta hai (file Meta se dikhate waqt aati hai)
+function extractMedia(msg) {
+  if (!MEDIA_TYPES.includes(msg.type)) return null;
+  const m = msg[msg.type];
+  if (!m?.id) return null;
+  return {
+    id: String(m.id),
+    type: msg.type,
+    mime: m.mime_type || "",
+    filename: m.filename || "",
+    caption: m.caption || "",
+  };
 }
 
 function describeMessage(msg) {
@@ -201,6 +336,10 @@ function describeMessage(msg) {
   if (msg.type === "button") return `[Button] ${msg.button?.text || ""}`;
   if (msg.type === "interactive")
     return `[Button] ${msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || ""}`;
+  if (MEDIA_TYPES.includes(msg.type)) {
+    const cap = msg[msg.type]?.caption;
+    return cap ? `[${MEDIA_LABELS[msg.type]}] ${cap}` : `[${MEDIA_LABELS[msg.type]}]`;
+  }
   return `[${msg.type}]`;
 }
 
@@ -267,7 +406,7 @@ function markNeedsHuman(phone, value) {
   const c = conversations.get(phone);
   if (c) {
     c.needsHuman = value;
-    saveInbox();
+    queueSave(phone);
   }
 }
 
@@ -383,7 +522,7 @@ async function handleAiReply(msg) {
     markNeedsHuman(phone, true);
     await sendText(phone, HUMAN_HANDOFF_TEXT);
     addMessage(phone, "out", HUMAN_HANDOFF_TEXT);
-    return;
+   return;
   }
 
   const reply = aiReply.trim();
@@ -427,6 +566,76 @@ function formatAddress(a) {
 function formatTotal(order) {
   const symbol = order.currency === "INR" ? "₹" : order.currency + " ";
   return `${symbol}${order.total_price}`;
+}
+
+// ---------- COD pehchan + High-risk points (bina AI) ----------
+
+function isCodOrder(order) {
+  const gateways = order.payment_gateway_names || [];
+  if (gateways.some((g) => /\bcod\b|cash on delivery/i.test(String(g)))) return true;
+  // Testing: admin se bane pending orders (bina gateway) ko COD maano
+  if (COD_TEST_MODE && gateways.length === 0 && order.financial_status === "pending") return true;
+  return false;
+}
+
+// Is phone ke pichle orders (60 din) Shopify se
+async function getPhoneHistory(phone, currentOrderId) {
+  const since = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+  const q = `query($q: String!) {
+    orders(first: 250, query: $q, sortKey: CREATED_AT, reverse: true) {
+      nodes {
+        legacyResourceId createdAt cancelledAt tags phone
+        customer { phone }
+        shippingAddress { phone }
+        billingAddress { phone }
+      }
+    }
+  }`;
+  const data = await shopifyGraphQL(q, { q: `created_at:>=${since}` });
+  const nodes = data?.data?.orders?.nodes || [];
+  return nodes
+    .filter((o) => String(o.legacyResourceId) !== String(currentOrderId))
+    .filter((o) =>
+      [o.phone, o.customer?.phone, o.shippingAddress?.phone, o.billingAddress?.phone].some(
+        (x) => cleanPhone(x) === phone
+      )
+    )
+    .map((o) => ({
+      createdAt: Date.parse(o.createdAt),
+      cancelled: !!o.cancelledAt,
+      tags: (o.tags || []).map((t) => String(t).toLowerCase()),
+    }));
+}
+
+// Points jodta hai. wa-trusted wale phone ko kabhi flag nahi karta.
+async function assessRisk(order, phone, { problems, cod, total, rtoPin }) {
+  let score = 0;
+  const reasons = [];
+  const add = (pts, why) => {
+    score += pts;
+    reasons.push(`${why} +${pts}`);
+  };
+
+  if (problems.length) add(RISK_POINTS.addressProblem, "address problem");
+  if (cod && total > COD_LIMIT) add(RISK_POINTS.codHigh, `COD ${total} > ${COD_LIMIT}`);
+  if (rtoPin) add(RISK_POINTS.rtoPincode, "RTO pincode");
+
+  let trusted = false;
+  try {
+    const prior = await getPhoneHistory(phone, order.id);
+    if (prior.some((o) => o.tags.includes("wa-trusted"))) trusted = true;
+
+    const last24h = prior.filter((o) => Date.now() - o.createdAt < 86400000).length;
+    if (last24h + 1 >= 3) add(RISK_POINTS.manyOrders, `24 ghante me ${last24h + 1} orders`);
+
+    if (prior.some((o) => o.cancelled || o.tags.includes("wa-cancelled")))
+      add(RISK_POINTS.prevCancelled, "pehle order cancel hua");
+    if (prior.some((o) => o.tags.includes("rto"))) add(RISK_POINTS.prevRto, "pehle parcel wapas aaya");
+  } catch (err) {
+    console.error("risk history error:", err.response?.data || err.message);
+  }
+
+  return { score, reasons, trusted };
 }
 
 // ---------- Address verify (bina AI: pincode + fuzzy match) ----------
@@ -545,7 +754,7 @@ async function checkAddress(addr) {
   }
 
   // 1. Country
-  const country = String(addr.country_code || addr.country  || "").trim();
+  const country = String(addr.country_code || addr.country || "").trim();
   if (country && !/^(in|india|bharat)$/i.test(country)) problems.push("country India nahi hai");
 
   // 2. Address line: ghar number zaroori nahi, par kuch locality/mohalla/landmark text hona chahiye
@@ -706,8 +915,7 @@ app.post(
 
     try {
       const order = JSON.parse(req.body.toString("utf8"));
-      if (processedOrders.has(order.id)) return;
-      processedOrders.add(order.id);
+      if (!(await claimOrder(order.id))) return;
 
       const phone = cleanPhone(
         order.shipping_address?.phone ||
@@ -740,9 +948,78 @@ app.post(
       );
 
       const address = formatAddress(order.shipping_address);
-      const imageUrl = await getProductImage(order.line_items?.[0]?.product_id);
 
-      const components = [
+      // ---- Pehle address aur risk dekhte hain (bina AI), taaki sahi message jaye ----
+      let addrResult = null;
+      try {
+        addrResult = await checkAddress(order.shipping_address);
+      } catch (err) {
+        console.error("address check error:", err.response?.data || err.message);
+      }
+      const problems = addrResult?.problems || [];
+      const warnings = addrResult?.warnings || [];
+      const addrUnknown = !addrResult || addrResult.unknown;
+
+      const pin = String(order.shipping_address?.zip || "").replace(/\s/g, "");
+      const rtoPin = RTO_PINCODES.has(pin);
+      const cod = isCodOrder(order);
+      const total = Number(order.total_price) || 0;
+
+      // COD freeze: COD order, aur (address me problem + amount limit se zyada) ya (pincode RTO list me)
+      const freezeCod = cod && ((problems.length > 0 && total > COD_LIMIT) || rtoPin);
+
+      let sentMessage = false;
+      let codFrozen = false;
+
+      if (freezeCod) {
+        if (!UPI_ID) {
+          console.warn(`Order ${order.name}: COD freeze banta tha par UPI_ID set nahi hai, normal message ja raha hai`);
+        } else {
+          try {
+            const frozenRes = await sendWhatsApp({
+              to: phone,
+              type: "template",
+              template: {
+                name: COD_TEMPLATE,
+                language: { code: COD_TEMPLATE_LANG },
+                components: [
+                  {
+                    type: "body",
+                    parameters: [
+                      { type: "text", text: customerName },
+                      { type: "text", text: String(order.name) },
+                      { type: "text", text: formatTotal(order) },
+                      { type: "text", text: UPI_ID },
+                    ],
+                  },
+                ],
+              },
+            });
+            console.log("COD freeze Meta response:", JSON.stringify(frozenRes.data));
+            codFrozen = true;
+            sentMessage = true;
+            const freezeWhy = rtoPin ? `pincode ${pin} RTO list me` : problems.join(" | ");
+            console.log(`Order ${order.name}: COD freeze message bheja -> ${phone} (${freezeWhy})`);
+            await addTags(order.id, ["wa-cod-frozen"]);
+            addMessage(
+              phone,
+              "out",
+              `[COD band message] Order ${order.name}, amount ${formatTotal(order)}, UPI ${UPI_ID}`
+            );
+          } catch (err) {
+            console.error(
+              "COD freeze message nahi gaya (template approve hua?), normal message bhej rahe hain:",
+              JSON.stringify(err.response?.data || err.message)
+            );
+            await addTags(order.id, ["wa-cod-freeze-failed"]);
+          }
+        }
+      }
+
+      if (!codFrozen) {
+        const imageUrl = await getProductImage(order.line_items?.[0]?.product_id);
+
+        const components = [
         {
           type: "body",
           parameters: [
@@ -774,31 +1051,34 @@ app.post(
         });
       }
 
-      // Pehle customer ko message (der na ho)
-      const waRes = await sendWhatsApp({
-        to: phone,
-        type: "template",
-        template: {
-          name: TEMPLATE_NAME,
-          language: { code: TEMPLATE_LANG },
-          components,
-        },
-      });
+        try {
+          const waRes = await sendWhatsApp({
+            to: phone,
+            type: "template",
+            template: {
+              name: TEMPLATE_NAME,
+              language: { code: TEMPLATE_LANG },
+              components,
+            },
+          });
+          console.log("Meta response:", JSON.stringify(waRes.data));
+          sentMessage = true;
+          await addTags(order.id, ["wa-pending"]);
+          console.log(`Order ${order.name}: WhatsApp bhej diya -> ${phone}`);
+        } catch (err) {
+          console.error(`Order ${order.name}: WhatsApp nahi gaya:`, JSON.stringify(err.response?.data || err.message));
+          await addTags(order.id, ["wa-msg-failed"]);
+        }
+      }
 
-      console.log("Meta response:", JSON.stringify(waRes.data));
-      await addTags(order.id, ["wa-pending"]);
-      console.log(`Order ${order.name}: WhatsApp bhej diya -> ${phone}`);
-
-      // Uske baad address check (bina AI): sirf aapke liye tag, customer ko kuch nahi jata
-      //   sahi  -> wa-address-ok
+      // ---- Address ke tag (sirf aapke liye, customer ko kuch nahi jata) ----
+      //   sahi  -> wa-address-ok   (city galat lage to saath me wa-city-check)
       //   galat -> wa-check-address
       try {
-        const { problems, warnings = [], unknown } = await checkAddress(order.shipping_address);
-
         if (problems.length) {
           console.log(`Order ${order.name}: address check: ${problems.join(" | ")}`);
           await addTags(order.id, ["wa-check-address"]);
-        } else if (unknown) {
+        } else if (addrUnknown) {
           console.warn(`Order ${order.name}: pincode API chali nahi, address verify nahi hua`);
         } else {
           console.log(`Order ${order.name}: address OK`);
@@ -809,7 +1089,20 @@ app.post(
           }
         }
       } catch (err) {
-        console.error("address check error:", err.response?.data || err.message);
+        console.error("address tag error:", err.response?.data || err.message);
+      }
+
+      // ---- High-risk flag (points se, bina AI) ----
+      try {
+        const risk = await assessRisk(order, phone, { problems, cod, total, rtoPin });
+        console.log(
+          `Order ${order.name}: risk score ${risk.score}${risk.reasons.length ? " (" + risk.reasons.join(", ") + ")" : ""}${risk.trusted ? " | trusted customer" : ""}`
+        );
+        if (!risk.trusted &&risk.score >= HIGH_RISK_SCORE) {
+          await addTags(order.id, ["wa-high-risk"]);
+        }
+      } catch (err) {
+        console.error("risk check error:", err.response?.data || err.message);
       }
     } catch (err) {
       console.error("orders-create error:", err.response?.data || err.message);
@@ -819,6 +1112,18 @@ app.post(
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+
+// Customer ne photo/video/screenshot bheja: ek ghante me max ek baar fixed reply
+const mediaAcked = new Map();
+async function ackMedia(phone) {
+  const last = mediaAcked.get(phone) || 0;
+  if (Date.now() - last < 3600 * 1000) return;
+  mediaAcked.set(phone, Date.now());
+  const text =
+    "Aapka message humne dekh liya hai 🙏 Hamari team check karke jaldi aapko confirm karegi 😊";
+  await sendText(phone, text);
+  addMessage(phone, "out", text);
+}
 
 // ---------- Meta webhook: verify ----------
 app.get("/webhook", (req, res) => {
@@ -848,7 +1153,8 @@ app.post("/webhook", async (req, res) => {
           const profileName = (change.value?.contacts || []).find(
             (c) => c.wa_id === msg.from
           )?.profile?.name;
-          addMessage(msg.from, "in", describeMessage(msg), profileName);
+          const media = extractMedia(msg);
+          addMessage(msg.from, "in", describeMessage(msg), profileName, media);
 
           let payload = null;
           if (msg.type === "button") payload = msg.button?.payload;
@@ -874,6 +1180,10 @@ app.post("/webhook", async (req, res) => {
               );
             }
             console.log(`Reply: ${action} order ${orderId}`);
+          } else if (media) {
+            // Photo/video/screenshot: inbox me red nishan + customer ko ek chhota fixed reply (AI nahi)
+            markNeedsHuman(msg.from, true);
+            await ackMedia(msg.from);
           } else if (AI_REPLY && msg.type === "text" && GEMINI_API_KEY) {
             await handleAiReply(msg);
           }
@@ -911,12 +1221,105 @@ body{font-family:Arial,sans-serif;margin:0;background:#f3f0ff;color:#222}
 .in{background:#fff;margin-right:auto}
 .out{background:#d9fdd3;margin-left:auto}
 .msg small{display:block;color:#777;font-size:10px;margin-top:3px}
+.mm{max-width:100%;max-height:360px;border-radius:8px;display:block;margin-bottom:4px}
+audio.mm{width:100%}
 textarea{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #ccc;font-size:15px}
 button{background:#8a2be2;color:#fff;border:0;padding:12px 18px;border-radius:8px;font-size:15px;margin-top:6px}
 .warn{background:#fff3cd;padding:8px;border-radius:8px;margin:8px 0;font-size:13px}
 .err{background:#f8d7da;padding:8px;border-radius:8px;margin:8px 0;font-size:13px}
 </style></head><body>${body}</body></html>`;
 }
+
+// Photo / video / audio / document ko inbox me dikhane ka HTML
+function mediaHtml(m, k) {
+  if (!m?.id) return "";
+  const src = esc(`/inbox/media?key=${k}&id=${encodeURIComponent(m.id)}`);
+  if (m.type === "image" || m.type === "sticker")
+    return `<a href="${src}" target="_blank"><img class="mm" loading="lazy" src="${src}" alt="photo"></a>`;
+  if (m.type === "video") return `<video class="mm" controls preload="metadata" src="${src}"></video>`;
+  if (m.type === "audio") return `<audio class="mm" controls preload="none" src="${src}"></audio>`;
+  return `<a href="${src}" target="_blank">&#128196; ${esc(m.filename || "Document")}</a><br>`;
+}
+
+// Jo file browser me seedha khul sakti hai (baaki sab download hongi, taaki customer ki bheji file page me chal na sake)
+const INLINE_MIMES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "video/mp4",
+  "video/3gpp",
+  "audio/ogg",
+  "audio/mpeg",
+  "audio/aac",
+  "audio/mp4",
+  "audio/amr",
+  "application/pdf",
+]);
+
+// Meta se file mangakar dikhata hai (apne server par save nahi karta)
+app.get("/inbox/media", async (req, res) => {
+  const key = inboxAuth(req, res);
+  if (!key) return;
+  const id = String(req.query.id || "");
+  if (!/^\d{5,30}$/.test(id)) return res.status(400).send("Bad id");
+
+  try {
+    const auth = { Authorization: `Bearer ${WHATSAPP_TOKEN}` };
+    const meta = await axios.get(`https://graph.facebook.com/${GRAPH_VERSION}/${id}`, {
+      headers: auth,
+      timeout: 15000,
+    });
+    const fileUrl = meta.data?.url;
+    if (!fileUrl) return res.status(404).send("File nahi mili");
+
+    const file = await axios.get(fileUrl, {
+      headers: auth,
+      responseType: "arraybuffer",
+      timeout: 60000,
+      maxContentLength: 40 * 1024 * 1024,
+    });
+    const buf = Buffer.from(file.data);
+    const mime = String(meta.data?.mime_type || file.headers["content-type"] || "application/octet-stream")
+      .split(";")[0]
+      .trim()
+      .toLowerCase();
+    const inline = INLINE_MIMES.has(mime);
+
+    res.set({
+      "Content-Type": inline ? mime : "application/octet-stream",
+      "Content-Disposition": inline ? "inline" : "attachment",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "sandbox",
+      "Cache-Control": "private, max-age=86400",
+      "Accept-Ranges": "bytes",
+    });
+
+    // Video/audio ke liye Range support (seek aur Safari ke liye)
+    const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || "");
+    if (range && (range[1] || range[2])) {
+      const total = buf.length;
+      let start = range[1] ? parseInt(range[1], 10) : total - parseInt(range[2], 10);
+      let end = range[1] && range[2] ? parseInt(range[2], 10) : total - 1;
+      if (start < 0) start = 0;
+      if (end >= total) end = total - 1;
+      if (start > end || start >= total) {
+        res.set("Content-Range", `bytes */${total}`);
+        return res.status(416).end();
+      }
+      res.set({ "Content-Range": `bytes ${start}-${end}/${total}`, "Content-Length": end - start + 1 });
+      return res.status(206).end(buf.subarray(start, end + 1));
+    }
+    res.set("Content-Length", buf.length);
+    return res.status(200).end(buf);
+  } catch (err) {
+    const code = err.response?.status;
+    console.error("inbox media error:", code, err.response?.data?.error?.message || err.message);
+    res
+      .status(code === 404 || code === 400 ? 404 : 502)
+      .send("File nahi khul payi (Meta par 30 din baad file hat jaati hai)");
+  }
+});
 
 app.get("/inbox", (req, res) => {
   const key = inboxAuth(req, res);
@@ -956,7 +1359,10 @@ ${x.c.needsHuman ? "🔴 " : ""}<b>${esc(x.c.name || "Customer")}</b> (+${esc(x.
   const lastIn = [...c.messages].reverse().find((m) => m.dir === "in");
   const within24 = lastIn && Date.now() - lastIn.time < 24 * 3600 * 1000;
   const bubbles = c.messages
-    .map((m) => `<div class="msg ${m.dir}">${esc(m.text)}<small>${fmtTime(m.time)}</small></div>`)
+    .map(
+      (m) =>
+        `<div class="msg ${m.dir}">${mediaHtml(m.media, k)}${esc(m.media ? m.media.caption || "" : m.text)}<small>${fmtTime(m.time)}</small></div>`
+    )
     .join("");
   const err = req.query.err ? `<div class="err">Reply nahi gaya: ${esc(req.query.err)}</div>` : "";
   const warn = within24
@@ -1101,5 +1507,14 @@ app.get("/cron/reminders", (req, res) => {
 // ---------- Health check ----------
 app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
 
-app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
-  
+// Pehle database se purani chats load, phir server start
+(async () => {
+  try {
+    await initDb();
+  } catch (err) {
+    db = null;
+    console.error("MongoDB connect nahi hua, file se chalega:", err.message);
+  }
+  app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
+})();
+      
