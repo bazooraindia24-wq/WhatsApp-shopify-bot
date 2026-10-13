@@ -45,6 +45,18 @@ const COD_TEMPLATE_LANG = process.env.COD_TEMPLATE_LANG || "en";
 // Testing ke liye: on karoge to bina payment gateway wale pending (manual) orders ko COD maana jayega
 const COD_TEST_MODE = process.env.COD_TEST_MODE === "on";
 
+// Online payment ke baad "payment received" message (bina button)
+const PAID_TEMPLATE = process.env.PAID_TEMPLATE || "payment_received";
+const PAID_TEMPLATE_LANG = process.env.PAID_TEMPLATE_LANG || "en";
+
+// Auto-cancel: unpaid order par customer 24 ghante me kuch na bole to cancel + restock
+// AUTO_CANCEL=off karke band kar sakte ho
+const AUTO_CANCEL = process.env.AUTO_CANCEL !== "off";
+const AUTO_CANCEL_HOURS = Number(process.env.AUTO_CANCEL_HOURS ?? 24);
+// Optional: cancel hone ka WhatsApp template (customer ne reply nahi kiya to free text nahi ja sakta). Khali = message nahi jayega
+const AUTO_CANCEL_TEMPLATE = (process.env.AUTO_CANCEL_TEMPLATE || "").trim();
+const AUTO_CANCEL_TEMPLATE_LANG = process.env.AUTO_CANCEL_TEMPLATE_LANG || "en";
+
 // High RTO pincodes: comma se alag, jaise 444705,444601 (Render me RTO_PINCODES me badlo)
 const RTO_PINCODES = new Set(
   String(process.env.RTO_PINCODES || "")
@@ -499,7 +511,7 @@ async function getCustomerOrdersText(phone) {
 
 async function handleAiReply(msg) {
   const phone = msg.from;
-  const allowed = aiAllowed(phone);
+ const allowed = aiAllowed(phone);
   if (allowed !== true) {
     console.log(`AI limit: ${phone} ko is ghante aur reply nahi`);
     markNeedsHuman(phone, true);
@@ -522,7 +534,7 @@ async function handleAiReply(msg) {
     markNeedsHuman(phone, true);
     await sendText(phone, HUMAN_HANDOFF_TEXT);
     addMessage(phone, "out", HUMAN_HANDOFF_TEXT);
-   return;
+    return;
   }
 
   const reply = aiReply.trim();
@@ -754,7 +766,7 @@ async function checkAddress(addr) {
   }
 
   // 1. Country
-  const country = String(addr.country_code || addr.country || "").trim();
+const country = String(addr.country_code || addr.country || "").trim();
   if (country && !/^(in|india|bharat)$/i.test(country)) problems.push("country India nahi hai");
 
   // 2. Address line: ghar number zaroori nahi, par kuch locality/mohalla/landmark text hona chahiye
@@ -887,6 +899,84 @@ async function sendText(to, text) {
   }
 }
 
+// ---------- Payment received message (bina button) ----------
+
+function verifyShopifyHmac(req) {
+  const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
+  const secret = (SHOPIFY_API_SECRET || "").trim();
+  const digest = crypto.createHmac("sha256", secret).update(req.body).digest("base64");
+  const a = Buffer.from(digest);
+  const b = Buffer.from(hmacHeader);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// Ek order ko sirf ek baar "payment received" jaye (create + paid webhook dono aa sakte hain)
+async function notifyPaid(order, phone) {
+  if (order.cancelled_at) return false;
+  if (!(await claimOrder(`paid_${order.id}`))) return false;
+  const name = cleanText(
+    order.shipping_address?.first_name || order.customer?.first_name || "Customer",
+    60
+  );
+  try {
+    const r = await sendWhatsApp({
+      to: phone,
+      type: "template",
+      template: {
+        name: PAID_TEMPLATE,
+        language: { code: PAID_TEMPLATE_LANG },
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: name },
+              { type: "text", text: String(order.name) },
+            ],
+          },
+        ],
+      },
+    });
+    console.log("Payment received Meta response:", JSON.stringify(r.data));
+    await addTags(order.id, ["wa-paid"]);
+    await removeTags(order.id, ["wa-pending"]);
+    addMessage(phone, "out", `[Payment received] Order ${order.name}`);
+    console.log(`Order ${order.name}: payment received message bheja -> ${phone}`);
+    return true;
+  } catch (err) {
+    console.error(
+      `Order ${order.name}: payment received message nahi gaya (template approve hua?):`,
+      JSON.stringify(err.response?.data || err.message)
+    );
+    await addTags(order.id, ["wa-paid", "wa-msg-failed"]);
+    return false;
+  }
+}
+
+app.post(
+  "/webhooks/orders-paid",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    if (!verifyShopifyHmac(req)) return res.status(401).send("Unauthorized");
+    res.status(200).send("OK");
+    try {
+      const order = JSON.parse(req.body.toString("utf8"));
+      const phone = cleanPhone(
+        order.shipping_address?.phone ||
+          order.phone ||
+          order.customer?.phone ||
+          order.billing_address?.phone
+      );
+      if (!phone) {
+        await addTags(order.id, ["wa-paid", "wa-no-phone"]);
+        return;
+      }
+      await notifyPaid(order, phone);
+    } catch (err) {
+      console.error("orders-paid error:", err.response?.data || err.message);
+    }
+  }
+);
+
 // ---------- Shopify webhook: orders/create ----------
 
 app.post(
@@ -971,6 +1061,12 @@ app.post(
       let sentMessage = false;
       let codFrozen = false;
 
+      // Checkout par hi online paid: sirf "payment received" (bina button), Confirm/Cancel wala message nahi
+      const prepaid = order.financial_status === "paid";
+      if (prepaid) {
+        sentMessage = await notifyPaid(order, phone);
+      }
+
       if (freezeCod) {
         if (!UPI_ID) {
           console.warn(`Order ${order.name}: COD freeze banta tha par UPI_ID set nahi hai, normal message ja raha hai`);
@@ -1016,7 +1112,7 @@ app.post(
         }
       }
 
-      if (!codFrozen) {
+      if (!codFrozen && !prepaid) {
         const imageUrl = await getProductImage(order.line_items?.[0]?.product_id);
 
         const components = [
@@ -1098,7 +1194,7 @@ app.post(
         console.log(
           `Order ${order.name}: risk score ${risk.score}${risk.reasons.length ? " (" + risk.reasons.join(", ") + ")" : ""}${risk.trusted ? " | trusted customer" : ""}`
         );
-        if (!risk.trusted &&risk.score >= HIGH_RISK_SCORE) {
+        if (!risk.trusted && risk.score >= HIGH_RISK_SCORE) {
           await addTags(order.id, ["wa-high-risk"]);
         }
       } catch (err) {
@@ -1164,7 +1260,19 @@ app.post("/webhook", async (req, res) => {
             const [action, orderId] = String(payload).split("_");
             if (!orderId) continue;
 
+            let alreadyAutoCancelled = false;
             if (action === "CONFIRM") {
+              try {
+                alreadyAutoCancelled = (await getOrderTags(orderId)).includes("wa-auto-cancelled");
+              } catch (e) {}
+            }
+
+            if (alreadyAutoCancelled) {
+              await sendText(
+                msg.from,
+                "Sorry 🙏 24 ghante tak reply na aane se ye order cancel ho gaya tha. Aap chahein to Bazoora par dobara order kar sakte hain 😊"
+              );
+            } else if (action === "CONFIRM") {
               await addTags(orderId, ["wa-confirmed"]);
               await removeTags(orderId, ["wa-pending", "wa-cancelled"]);
               await sendText(
@@ -1504,6 +1612,151 @@ app.get("/cron/reminders", (req, res) => {
   });
 });
 
+// ---------- Auto-cancel: unpaid order, 24 ghante me koi jawab nahi ----------
+
+async function getOrderTags(orderId) {
+  const q = `query($id: ID!) { order(id: $id) { tags } }`;
+  const data = await shopifyGraphQL(q, { id: `gid://shopify/Order/${orderId}` });
+  return data?.data?.order?.tags || [];
+}
+
+let autoCancelRunning = false;
+
+async function runAutoCancel({ dry = false } = {}) {
+  const out = [];
+  if (!AUTO_CANCEL) return ["AUTO_CANCEL=off hai, kuch nahi kiya"];
+  if (!db) return ["MongoDB connected nahi hai, safety ke liye auto-cancel skip"];
+  if (autoCancelRunning) return ["Pehle se chal raha hai"];
+  autoCancelRunning = true;
+
+  try {
+    const cutoff = new Date(Date.now() - AUTO_CANCEL_HOURS * 3600000);
+    const oldest = new Date(Date.now() - 7 * 86400000).toISOString();
+    const search =
+      `financial_status:pending status:open fulfillment_status:unfulfilled ` +
+      `created_at:<${cutoff.toISOString()} created_at:>=${oldest} ` +
+      `-tag:wa-confirmed -tag:wa-cancelled -tag:wa-auto-cancelled -tag:wa-trusted -tag:wa-paid`;
+    const q = `query($q: String!) {
+      orders(first: 50, query: $q) {
+        nodes {
+          id
+          legacyResourceId
+          name
+          createdAt
+          cancelledAt
+          displayFinancialStatus
+          displayFulfillmentStatus
+          tags
+          phone
+          customer { firstName phone }
+          shippingAddress { firstName phone }
+        }
+      }
+    }`;
+     const data = await shopifyGraphQL(q, { q: search });
+    const orders = data?.data?.orders?.nodes || [];
+    out.push(`${orders.length} order mile (pending, ${AUTO_CANCEL_HOURS}h se purane)`);
+
+    for (const o of orders) {
+      const orderId = o.legacyResourceId;
+      const tags = o.tags || [];
+      if (o.cancelledAt) continue;
+      if (o.displayFinancialStatus !== "PENDING") continue;
+      if (o.displayFulfillmentStatus !== "UNFULFILLED") continue;
+      // Message gaya hi nahi to cancel nahi (customer ko pata hi nahi chala)
+      if (!tags.includes("wa-pending") && !tags.includes("wa-cod-frozen")) {
+        out.push(`${o.name}: skip (customer ko message gaya hi nahi)`);
+        continue;
+      }
+      if (tags.includes("wa-msg-failed") || tags.includes("wa-no-phone")) {
+        out.push(`${o.name}: skip (message fail/phone nahi)`);
+        continue;
+      }
+      const phone = cleanPhone(o.shippingAddress?.phone || o.phone || o.customer?.phone);
+      if (!phone) {
+        out.push(`${o.name}: skip (phone nahi)`);
+        continue;
+      }
+      // Order ke baad customer ka koi bhi message aaya ho to cancel nahi
+      const created = new Date(o.createdAt).getTime();
+      const replied = (conversations.get(phone)?.messages || []).some(
+        (m) => m.dir === "in" && m.time > created
+      );
+      if (replied) {
+        out.push(`${o.name}: skip (customer ne reply kiya)`);
+        continue;
+      }
+
+      if (dry) {
+        out.push(`${o.name}: DRY RUN, cancel hota (phone ${phone})`);
+        continue;
+      }
+
+      const m = `mutation($id: ID!) {
+        orderCancel(orderId: $id, reason: OTHER, refund: false, restock: true, notifyCustomer: false,
+          staffNote: "Auto-cancel: customer ne ${AUTO_CANCEL_HOURS} ghante me reply/payment nahi kiya") {
+          job { id }
+          orderCancelUserErrors { field message }
+        }
+      }`;
+      const r = await shopifyGraphQL(m, { id: o.id });
+      const errs = r?.data?.orderCancel?.orderCancelUserErrors || [];
+      if (errs.length || !r?.data?.orderCancel) {
+        out.push(`${o.name}: cancel fail ${JSON.stringify(errs)}`);
+        continue;
+      }
+      await addTags(orderId, ["wa-auto-cancelled"]);
+      await removeTags(orderId, ["wa-pending"]);
+      out.push(`${o.name}: auto-cancel + restock ho gaya`);
+      console.log(`Auto-cancel: ${o.name} (${phone})`);
+
+      if (AUTO_CANCEL_TEMPLATE) {
+        try {
+          await sendWhatsApp({
+            to: phone,
+            type: "template",
+            template: {
+              name: AUTO_CANCEL_TEMPLATE,
+              language: { code: AUTO_CANCEL_TEMPLATE_LANG },
+              components: [
+                {
+                  type: "body",
+                  parameters: [
+                    { type: "text", text: cleanText(o.shippingAddress?.firstName || o.customer?.firstName || "Customer", 60) },
+                    { type: "text", text: String(o.name) },
+                  ],
+                },
+              ],
+            },
+          });
+          addMessage(phone, "out", `[Auto-cancel message] Order ${o.name}`);
+        } catch (err) {
+          console.error("auto-cancel message error:", JSON.stringify(err.response?.data || err.message));
+        }
+      }
+    }
+  } finally {
+    autoCancelRunning = false;
+  }
+  return out;
+}
+
+app.get("/cron/auto-cancel", async (req, res) => {
+  if (!CRON_SECRET || req.query.key !== CRON_SECRET) {
+    return res.status(403).send("Forbidden");
+  }
+  const dry = req.query.dry === "1";
+  try {
+    const out = await runAutoCancel({ dry });
+    console.log("Auto-cancel run:", out.join(" | "));
+    res.status(200).type("text/plain").send(out.join("\n"));
+  } catch (err) {
+    autoCancelRunning = false;
+    console.error("runAutoCancel error:", err.response?.data || err.message);
+    res.status(500).send("error");
+  }
+});
+
 // ---------- Health check ----------
 app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
 
@@ -1517,4 +1770,4 @@ app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
   }
   app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
 })();
-      
+    
