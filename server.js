@@ -64,6 +64,16 @@ const RTO_PINCODES = new Set(
     .filter((p) => /^\d{6}$/.test(p))
 );
 
+// Block: Render me BLOCKED_PHONES=9876543210,9123456789 (ya Shopify me kisi purane order par tag wa-block lagao, redeploy nahi chahiye)
+// BLOCK_ACTION=cancel (default: naya order cancel + restock) ya tag (sirf tag wa-blocked)
+const BLOCKED_PHONES = new Set(
+  String(process.env.BLOCKED_PHONES || "")
+    .split(/[,\s]+/)
+    .map((p) => cleanPhone(p))
+    .filter(Boolean)
+);
+const BLOCK_ACTION = process.env.BLOCK_ACTION === "tag" ? "tag" : "cancel";
+
 // High-risk flag: itne ya zyada points hone par wa-high-risk tag
 const HIGH_RISK_SCORE = Number(process.env.HIGH_RISK_SCORE ?? 50);
 const RISK_POINTS = {
@@ -374,7 +384,6 @@ function fmtTime(t) {
 }
 
 // ---------- AI Support helpers ----------
-
 // true = reply do, "notify" = limit abhi lagi (customer ko ek baar batao), false = chup raho
 function aiAllowed(phone) {
   const now = Date.now();
@@ -511,7 +520,7 @@ async function getCustomerOrdersText(phone) {
 
 async function handleAiReply(msg) {
   const phone = msg.from;
- const allowed = aiAllowed(phone);
+  const allowed = aiAllowed(phone);
   if (allowed !== true) {
     console.log(`AI limit: ${phone} ko is ghante aur reply nahi`);
     markNeedsHuman(phone, true);
@@ -591,8 +600,8 @@ function isCodOrder(order) {
 }
 
 // Is phone ke pichle orders (60 din) Shopify se
-async function getPhoneHistory(phone, currentOrderId) {
-  const since = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+async function getPhoneHistory(phone, currentOrderId, days = 60) {
+  const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
   const q = `query($q: String!) {
     orders(first: 250, query: $q, sortKey: CREATED_AT, reverse: true) {
       nodes {
@@ -1033,6 +1042,27 @@ app.post(
         return;
       }
 
+      // ---- Block list: pehle se block kiye number ka order, koi message nahi ----
+      let blocked = BLOCKED_PHONES.has(phone);
+      if (!blocked) {
+        try {
+          const hist = await getPhoneHistory(phone, order.id, 365);
+          blocked = hist.some((o) => o.tags.includes("wa-block"));
+        } catch (err) {
+          console.error("block check error:", err.response?.data || err.message);
+        }
+      }
+      if (blocked) {
+        console.warn(`Order ${order.name}: BLOCKED number ${phone} (action: ${BLOCK_ACTION})`);
+        await addTags(order.id, ["wa-blocked"]);
+        if (BLOCK_ACTION === "cancel") {
+          const r = await cancelShopifyOrder(order.id, "Blocked number: auto-cancel");
+          if (!r.ok) console.error(`Order ${order.name}: block cancel fail`, JSON.stringify(r.errs));
+          else await addTags(order.id, ["wa-auto-cancelled"]);
+        }
+        return;
+      }
+
       const customerName = cleanText(
         order.shipping_address?.first_name || order.customer?.first_name || "Customer",
         60
@@ -1326,8 +1356,9 @@ function inboxAuth(req, res) {
     return null;
   }
   return key;
-      }
-            function page(title, body) {
+}
+
+function page(title, body) {
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
@@ -1501,7 +1532,7 @@ ${x.c.needsHuman ? "🔴 " : ""}<b>${esc(x.c.name || "Customer")}</b> (+${esc(x.
 <textarea name="text" rows="3" placeholder="Reply likho..." required></textarea>
 <button type="submit">Bhejo</button>
 </form></div>`
-    )
+         )
   );
 });
 
@@ -1627,6 +1658,18 @@ app.get("/cron/reminders", (req, res) => {
 
 // ---------- Auto-cancel: unpaid order, 24 ghante me koi jawab nahi ----------
 
+async function cancelShopifyOrder(orderId, note) {
+  const m = `mutation($id: ID!, $note: String) {
+    orderCancel(orderId: $id, reason: OTHER, refund: false, restock: true, notifyCustomer: false, staffNote: $note) {
+      job { id }
+      orderCancelUserErrors { field message }
+    }
+  }`;
+  const r = await shopifyGraphQL(m, { id: `gid://shopify/Order/${orderId}`, note });
+  const errs = r?.data?.orderCancel?.orderCancelUserErrors || [];
+  return { ok: !!r?.data?.orderCancel && !errs.length, errs };
+}
+
 async function getOrderTags(orderId) {
   const q = `query($id: ID!) { order(id: $id) { tags } }`;
   const data = await shopifyGraphQL(q, { id: `gid://shopify/Order/${orderId}` });
@@ -1705,17 +1748,9 @@ async function runAutoCancel({ dry = false } = {}) {
         continue;
       }
 
-      const m = `mutation($id: ID!) {
-        orderCancel(orderId: $id, reason: OTHER, refund: false, restock: true, notifyCustomer: false,
-          staffNote: "Auto-cancel: customer ne ${AUTO_CANCEL_HOURS} ghante me reply/payment nahi kiya") {
-          job { id }
-          orderCancelUserErrors { field message }
-        }
-      }`;
-      const r = await shopifyGraphQL(m, { id: o.id });
-      const errs = r?.data?.orderCancel?.orderCancelUserErrors || [];
-      if (errs.length || !r?.data?.orderCancel) {
-        out.push(`${o.name}: cancel fail ${JSON.stringify(errs)}`);
+      const cr = await cancelShopifyOrder(orderId, `Auto-cancel: customer ne ${AUTO_CANCEL_HOURS} ghante me reply/payment nahi kiya`);
+      if (!cr.ok) {
+        out.push(`${o.name}: cancel fail ${JSON.stringify(cr.errs)}`);
         continue;
       }
       await addTags(orderId, ["wa-auto-cancelled"]);
@@ -1832,4 +1867,3 @@ app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
   }
   app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
 })();
-          
