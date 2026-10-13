@@ -766,7 +766,7 @@ async function checkAddress(addr) {
   }
 
   // 1. Country
-const country = String(addr.country_code || addr.country || "").trim();
+  const country = String(addr.country_code || addr.country || "").trim();
   if (country && !/^(in|india|bharat)$/i.test(country)) problems.push("country India nahi hai");
 
   // 2. Address line: ghar number zaroori nahi, par kuch locality/mohalla/landmark text hona chahiye
@@ -912,8 +912,18 @@ function verifyShopifyHmac(req) {
 
 // Ek order ko sirf ek baar "payment received" jaye (create + paid webhook dono aa sakte hain)
 async function notifyPaid(order, phone) {
-  if (order.cancelled_at) return false;
-  if (!(await claimOrder(`paid_${order.id}`))) return false;
+  if (order.cancelled_at) {
+    console.log(`Order ${order.name}: cancelled hai, payment message skip`);
+    return false;
+  }
+  if (order.fulfillment_status === "fulfilled") {
+    console.log(`Order ${order.name}: delivery ho chuki, payment message skip`);
+    return false;
+  }
+  if (!(await claimOrder(`paid_${order.id}`))) {
+    console.log(`Order ${order.name}: payment message pehle hi bheja ja chuka, dobara nahi`);
+    return false;
+  }
   const name = cleanText(
     order.shipping_address?.first_name || order.customer?.first_name || "Customer",
     60
@@ -956,10 +966,14 @@ app.post(
   "/webhooks/orders-paid",
   express.raw({ type: "application/json" }),
   async (req, res) => {
-    if (!verifyShopifyHmac(req)) return res.status(401).send("Unauthorized");
+    if (!verifyShopifyHmac(req)) {
+      console.warn("orders-paid: Invalid Shopify HMAC");
+      return res.status(401).send("Unauthorized");
+    }
     res.status(200).send("OK");
     try {
       const order = JSON.parse(req.body.toString("utf8"));
+      console.log(`orders-paid webhook aaya: ${order.name} (status ${order.financial_status})`);
       const phone = cleanPhone(
         order.shipping_address?.phone ||
           order.phone ||
@@ -1312,9 +1326,8 @@ function inboxAuth(req, res) {
     return null;
   }
   return key;
-}
-
-function page(title, body) {
+      }
+            function page(title, body) {
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
@@ -1653,7 +1666,7 @@ async function runAutoCancel({ dry = false } = {}) {
         }
       }
     }`;
-     const data = await shopifyGraphQL(q, { q: search });
+    const data = await shopifyGraphQL(q, { q: search });
     const orders = data?.data?.orders?.nodes || [];
     out.push(`${orders.length} order mile (pending, ${AUTO_CANCEL_HOURS}h se purane)`);
 
@@ -1741,6 +1754,50 @@ async function runAutoCancel({ dry = false } = {}) {
   return out;
 }
 
+// Backup: agar Shopify ka orders/paid webhook na pahunche, to paid ho chuke orders ko yahan se message jata hai
+async function runPaidSweep({ dry = false } = {}) {
+  const out = [];
+  if (!db) return ["paid sweep: MongoDB nahi hai, skip"];
+  const since = new Date(Date.now() - 3 * 86400000).toISOString();
+  const search =
+    `financial_status:paid status:open fulfillment_status:unfulfilled created_at:>=${since} ` +
+    `-tag:wa-paid -tag:wa-cancelled -tag:wa-auto-cancelled`;
+  const q = `query($q: String!) {
+    orders(first: 50, query: $q) {
+      nodes {
+        legacyResourceId name cancelledAt tags phone
+        customer { firstName phone }
+        shippingAddress { firstName phone }
+      }
+    }
+  }`;
+  const data = await shopifyGraphQL(q, { q: search });
+  const orders = data?.data?.orders?.nodes || [];
+  out.push(`paid sweep: ${orders.length} paid order mile jinko payment message nahi gaya`);
+  for (const o of orders) {
+    if (!(o.tags || []).some((t) => t.startsWith("wa-"))) continue; // bot ke dekhe hue orders hi
+    const phone = cleanPhone(o.shippingAddress?.phone || o.phone || o.customer?.phone);
+    if (!phone) continue;
+    if (dry) {
+      out.push(`${o.name}: DRY RUN, payment_received jata`);
+      continue;
+    }
+    const sent = await notifyPaid(
+      {
+        id: o.legacyResourceId,
+        name: o.name,
+        cancelled_at: o.cancelledAt,
+        fulfillment_status: null,
+        shipping_address: { first_name: o.shippingAddress?.firstName },
+        customer: { first_name: o.customer?.firstName },
+      },
+      phone
+    );
+    out.push(`${o.name}: ${sent ? "payment_received bheja" : "skip/fail"}`);
+  }
+  return out;
+}
+
 app.get("/cron/auto-cancel", async (req, res) => {
   if (!CRON_SECRET || req.query.key !== CRON_SECRET) {
     return res.status(403).send("Forbidden");
@@ -1748,6 +1805,11 @@ app.get("/cron/auto-cancel", async (req, res) => {
   const dry = req.query.dry === "1";
   try {
     const out = await runAutoCancel({ dry });
+    try {
+      out.push(...(await runPaidSweep({ dry })));
+    } catch (e) {
+      out.push("paid sweep error: " + (e.response?.data?.error || e.message));
+    }
     console.log("Auto-cancel run:", out.join(" | "));
     res.status(200).type("text/plain").send(out.join("\n"));
   } catch (err) {
@@ -1770,4 +1832,4 @@ app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
   }
   app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
 })();
-    
+          
