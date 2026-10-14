@@ -506,9 +506,10 @@ async function sendUpiReminder(phone, aw) {
   // Ek saath kai message aaye to ek hi reminder (30 second me)
   if (Date.now() - (upiRemindedAt.get(phone) || 0) < 30000) return;
   upiRemindedAt.set(phone, Date.now());
-  const text = upiReminderText(aw);
-  await sendText(phone, text(phone, text);
-  addMessage(phone, "out", text);
+  const messageText = upiReminderText(aw);
+await sendText(phone, messageText);
+
+  addMessage(phone, "out", messagetext);
 }
 
 async function getOrderInfo(orderId) {
