@@ -64,6 +64,36 @@ const RTO_PINCODES = new Set(
     .filter((p) => /^\d{6}$/.test(p))
 );
 
+// ---------- Naye features (har ek tabhi chalta hai jab uska template Render me set ho) ----------
+// Review request: delivery ke REVIEW_DELAY_DAYS baad. Chalu karne ke liye REVIEW_TEMPLATE aur REVIEW_URL dono set karo
+const REVIEW_TEMPLATE = (process.env.REVIEW_TEMPLATE || "").trim();
+const REVIEW_TEMPLATE_LANG = process.env.REVIEW_TEMPLATE_LANG || "en";
+const REVIEW_URL = (process.env.REVIEW_URL || "").trim();
+const REVIEW_DELAY_DAYS = Number(process.env.REVIEW_DELAY_DAYS ?? 2);
+
+// RTO auto tag: Shopify me shipment ka status in me se ho to order par "rto" tag lagta hai (comma se alag)
+const RTO_STATUSES = new Set(
+  String(process.env.RTO_STATUSES || "FAILURE")
+    .split(/[,\s]+/)
+    .filter(Boolean)
+    .map((x) => x.toUpperCase())
+);
+
+// Roz ka summary aapke WhatsApp par: OWNER_PHONE zaroori. Template optional (24 ghante ke window ke bahar ke liye)
+const OWNER_PHONE = cleanPhoneEarly(process.env.OWNER_PHONE);
+const SUMMARY_TEMPLATE = (process.env.SUMMARY_TEMPLATE || "").trim();
+const SUMMARY_TEMPLATE_LANG = process.env.SUMMARY_TEMPLATE_LANG || "en";
+
+// High-risk COD customer ko prepaid offer. Chalu karne ke liye PREPAID_OFFER_TEMPLATE (aur UPI_ID) set karo
+const PREPAID_OFFER_TEMPLATE = (process.env.PREPAID_OFFER_TEMPLATE || "").trim();
+const PREPAID_OFFER_LANG = process.env.PREPAID_OFFER_LANG || "en";
+const PREPAID_OFFER_PERCENT = Number(process.env.PREPAID_OFFER_PERCENT ?? 5);
+
+function cleanPhoneEarly(raw) {
+  const d = String(raw || "").replace(/\D/g, "");
+  return d.length >= 10 ? "91" + d.slice(-10) : null;
+}
+
 // Block: Render me BLOCKED_PHONES=9876543210,9123456789 (ya Shopify me kisi purane order par tag wa-block lagao, redeploy nahi chahiye)
 // BLOCK_ACTION=cancel (default: naya order cancel + restock) ya tag (sirf tag wa-blocked)
 const BLOCKED_PHONES = new Set(
@@ -384,6 +414,7 @@ function fmtTime(t) {
 }
 
 // ---------- AI Support helpers ----------
+
 // true = reply do, "notify" = limit abhi lagi (customer ko ek baar batao), false = chup raho
 function aiAllowed(phone) {
   const now = Date.now();
@@ -1240,6 +1271,38 @@ app.post(
         );
         if (!risk.trusted && risk.score >= HIGH_RISK_SCORE) {
           await addTags(order.id, ["wa-high-risk"]);
+
+          // High-risk COD customer ko prepaid offer (frozen COD ko pehle hi UPI message ja chuka hai)
+          if (PREPAID_OFFER_TEMPLATE && UPI_ID && cod && !codFrozen && PREPAID_OFFER_PERCENT > 0) {
+            try {
+              const newAmount = Math.round((total * (100 - PREPAID_OFFER_PERCENT)) / 100);
+              await sendWhatsApp({
+                to: phone,
+                type: "template",
+                template: {
+                  name: PREPAID_OFFER_TEMPLATE,
+                  language: { code: PREPAID_OFFER_LANG },
+                  components: [
+                    {
+                      type: "body",
+                      parameters: [
+                        { type: "text", text: customerName },
+                        { type: "text", text: String(order.name) },
+                        { type: "text", text: String(PREPAID_OFFER_PERCENT) },
+                        { type: "text", text: String(newAmount) },
+                        { type: "text", text: UPI_ID },
+                      ],
+                    },
+                  ],
+                },
+              });
+              await addTags(order.id, ["wa-prepaid-offered"]);
+              addMessage(phone, "out", `[Prepaid offer] Order ${order.name}: ${PREPAID_OFFER_PERCENT}% off, Rs ${newAmount}`);
+              console.log(`Order ${order.name}: prepaid offer bheja (${PREPAID_OFFER_PERCENT}% off, Rs ${newAmount})`);
+            } catch (err) {
+              console.error("prepaid offer error:", JSON.stringify(err.response?.data || err.message));
+            }
+          }
         }
       } catch (err) {
         console.error("risk check error:", err.response?.data || err.message);
@@ -1379,6 +1442,13 @@ textarea{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:
 button{background:#8a2be2;color:#fff;border:0;padding:12px 18px;border-radius:8px;font-size:15px;margin-top:6px}
 .warn{background:#fff3cd;padding:8px;border-radius:8px;margin:8px 0;font-size:13px}
 .err{background:#f8d7da;padding:8px;border-radius:8px;margin:8px 0;font-size:13px}
+.bar{display:flex;gap:6px;margin-bottom:10px}
+.bar input[type=text]{flex:1;padding:10px;border-radius:8px;border:1px solid #ccc;font-size:15px}
+.bar button{margin:0;padding:10px 14px}
+.tabs a{display:inline-block;padding:7px 12px;border-radius:16px;background:#fff;color:#8a2be2;text-decoration:none;font-size:13px;margin-right:6px}
+.tabs a.on{background:#8a2be2;color:#fff}
+.ord{background:#fff;border-radius:8px;padding:8px;margin-bottom:10px;font-size:12px}
+.ord pre{white-space:pre-wrap;word-wrap:break-word;margin:4px 0 0;font-family:inherit}
 </style></head><body>${body}</body></html>`;
 }
 
@@ -1473,17 +1543,35 @@ app.get("/inbox/media", async (req, res) => {
   }
 });
 
-app.get("/inbox", (req, res) => {
+app.get("/inbox", async (req, res) => {
   const key = inboxAuth(req, res);
   if (!key) return;
   const k = encodeURIComponent(key);
   const phone = req.query.c;
 
   if (!phone) {
-    const list = [...conversations.entries()]
+    const all = [...conversations.entries()]
       .map(([p, c]) => ({ p, c, last: c.messages[c.messages.length - 1] }))
       .filter((x) => x.last)
       .sort((a, b) => b.last.time - a.last.time);
+    const waitingCount = all.filter((x) => x.last.dir === "in").length;
+    const onlyWaiting = req.query.f === "pending";
+    const term = String(req.query.q || "").trim().toLowerCase();
+    const list = all
+      .filter((x) => !onlyWaiting || x.last.dir === "in")
+      .filter(
+        (x) =>
+          !term ||
+          x.p.includes(term.replace(/\D/g, "") || "\u0000") ||
+          String(x.c.name || "").toLowerCase().includes(term) ||
+          x.c.messages.some((m) => String(m.text || "").toLowerCase().includes(term))
+      );
+    const bar = `<form class="bar" method="GET" action="/inbox">
+<input type="hidden" name="key" value="${esc(key)}">
+${onlyWaiting ? '<input type="hidden" name="f" value="pending">' : ""}
+<input type="text" name="q" value="${esc(req.query.q || "")}" placeholder="Naam, number ya message dhundo">
+<button type="submit">Dhundo</button></form>
+<div class="tabs"><a class="${onlyWaiting ? "" : "on"}" href="/inbox?key=${k}">Sab (${all.length})</a><a class="${onlyWaiting ? "on" : ""}" href="/inbox?key=${k}&f=pending">Jawab baaki (${waitingCount})</a></div><br>`;
     const items = list.length
       ? list
           .map(
@@ -1493,11 +1581,11 @@ ${x.c.needsHuman ? "🔴 " : ""}<b>${esc(x.c.name || "Customer")}</b> (+${esc(x.
 <small>${fmtTime(x.last.time)}</small></a>`
           )
           .join("")
-      : `<div class="card">Abhi koi message nahi aaya.</div>`;
+      : `<div class="card">Koi chat nahi mili.</div>`;
     return res.send(
       page(
         "Bazoora Inbox",
-        `<div class="top">Bazoora Inbox</div><div class="wrap">${items}</div>`
+        `<div class="top">Bazoora Inbox</div><div class="wrap">${bar}${items}</div>`
       )
     );
   }
@@ -1516,6 +1604,13 @@ ${x.c.needsHuman ? "🔴 " : ""}<b>${esc(x.c.name || "Customer")}</b> (+${esc(x.
         `<div class="msg ${m.dir}">${mediaHtml(m.media, k)}${esc(m.media ? m.media.caption || "" : m.text)}<small>${fmtTime(m.time)}</small></div>`
     )
     .join("");
+  let ordersText = "";
+  try {
+    ordersText = await getCustomerOrdersText(phone);
+  } catch (e) {}
+  const ordersBox = ordersText
+    ? `<div class="ord"><b>Is customer ke orders</b><pre>${esc(ordersText)}</pre></div>`
+    : "";
   const err = req.query.err ? `<div class="err">Reply nahi gaya: ${esc(req.query.err)}</div>` : "";
   const warn = within24
     ? ""
@@ -1525,14 +1620,14 @@ ${x.c.needsHuman ? "🔴 " : ""}<b>${esc(x.c.name || "Customer")}</b> (+${esc(x.
     page(
       "Chat",
       `<div class="top"><a href="/inbox?key=${k}">&larr; Inbox</a> &nbsp; ${esc(c.name || "Customer")} (+${esc(phone)})</div>
-<div class="wrap">${bubbles}${err}${warn}
+<div class="wrap">${ordersBox}${bubbles}${err}${warn}
 <form method="POST" action="/inbox/reply">
 <input type="hidden" name="key" value="${esc(key)}">
 <input type="hidden" name="phone" value="${esc(phone)}">
 <textarea name="text" rows="3" placeholder="Reply likho..." required></textarea>
 <button type="submit">Bhejo</button>
 </form></div>`
-         )
+    )
   );
 });
 
@@ -1789,6 +1884,198 @@ async function runAutoCancel({ dry = false } = {}) {
   return out;
 }
 
+// ---------- Delivery ke baad: RTO tag + review request ----------
+
+let lastPostDelivery = 0;
+
+async function runPostDelivery({ force = false } = {}) {
+  const out = [];
+  // 5 minute ke cron se bulane par bhi sirf 30 minute me ek baar
+  if (!force && Date.now() - lastPostDelivery < 30 * 60000) return out;
+  lastPostDelivery = Date.now();
+
+  const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const q = `query($q: String!) {
+    orders(first: 100, query: $q) {
+      nodes {
+        legacyResourceId name tags phone
+        customer { firstName phone }
+        shippingAddress { firstName phone }
+        fulfillments(first: 5) { displayStatus deliveredAt updatedAt }
+      }
+    }
+  }`;
+  const data = await shopifyGraphQL(q, {
+    q: `fulfillment_status:fulfilled created_at:>=${since} -tag:wa-cancelled`,
+  });
+  const orders = data?.data?.orders?.nodes || [];
+
+  for (const o of orders) {
+    const tags = o.tags || [];
+    const ful = o.fulfillments || [];
+    const statuses = ful.map((f) => String(f.displayStatus || "").toUpperCase());
+
+    // 1) RTO: parcel wapas / delivery fail
+    const isRto = statuses.some((st) => RTO_STATUSES.has(st));
+    if (isRto && !tags.includes("rto")) {
+      await addTags(o.legacyResourceId, ["rto", "wa-rto-auto"]);
+      out.push(`${o.name}: RTO tag laga (status ${statuses.join(",")})`);
+      console.log(`RTO tag: ${o.name} (${statuses.join(",")})`);
+      continue;
+    }
+    if (isRto || tags.includes("rto")) continue;
+
+    // 2) Review request
+    if (!REVIEW_TEMPLATE || !REVIEW_URL) continue;
+    if (tags.includes("wa-review-asked")) continue;
+    if (!tags.some((t) => t.startsWith("wa-"))) continue; // bot ke dekhe hue orders hi
+    const delivered = ful.filter((f) => ["DELIVERED", "MARKED_AS_DELIVERED"].includes(String(f.displayStatus || "").toUpperCase()));
+    if (!delivered.length) continue;
+    const when = Math.max(...delivered.map((f) => Date.parse(f.deliveredAt || f.updatedAt) || 0));
+    const days = (Date.now() - when) / 86400000;
+    if (!when || days < REVIEW_DELAY_DAYS || days > 14) continue;
+    const phone = cleanPhone(o.shippingAddress?.phone || o.phone || o.customer?.phone);
+    if (!phone) continue;
+    if (!(await claimOrder(`review_${o.legacyResourceId}`))) continue;
+    try {
+      await sendWhatsApp({
+        to: phone,
+        type: "template",
+        template: {
+          name: REVIEW_TEMPLATE,
+          language: { code: REVIEW_TEMPLATE_LANG },
+          components: [
+            {
+              type: "body",
+              parameters: [
+                { type: "text", text: cleanText(o.shippingAddress?.firstName || o.customer?.firstName || "Customer", 60) },
+                { type: "text", text: String(o.name) },
+                { type: "text", text: REVIEW_URL },
+              ],
+            },
+          ],
+        },
+      });
+      await addTags(o.legacyResourceId, ["wa-review-asked"]);
+      addMessage(phone, "out", `[Review request] Order ${o.name}`);
+      out.push(`${o.name}: review request bheja`);
+      console.log(`Review request: ${o.name} -> ${phone}`);
+    } catch (err) {
+      console.error(`Review message error ${o.name}:`, JSON.stringify(err.response?.data || err.message));
+      await addTags(o.legacyResourceId, ["wa-review-asked", "wa-msg-failed"]);
+    }
+  }
+  return out;
+}
+
+// ---------- Roz ka summary (kal ke orders) ----------
+
+async function buildSummary() {
+  // Kal ka din, India time (IST) ke hisaab se
+  const IST = 5.5 * 3600000;
+  const now = new Date(Date.now() + IST);
+  const todayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - IST;
+  const from = new Date(todayStart - 86400000);
+  const to = new Date(todayStart);
+  const fi = new Date(from.getTime() + IST);
+  const label = `${String(fi.getUTCDate()).padStart(2, "0")}/${String(fi.getUTCMonth() + 1).padStart(2, "0")}`;
+
+  const q = `query($q: String!) {
+    orders(first: 200, query: $q) {
+      nodes {
+        name cancelledAt displayFinancialStatus tags
+        totalPriceSet { shopMoney { amount } }
+      }
+    }
+  }`;
+  const data = await shopifyGraphQL(q, {
+    q: `created_at:>=${from.toISOString()} created_at:<${to.toISOString()}`,
+  });
+  const orders = data?.data?.orders?.nodes || [];
+  const has = (o, t) => (o.tags || []).includes(t);
+  const n = (f) => orders.filter(f).length;
+  const live = orders.filter((o) => !o.cancelledAt);
+  const stats = {
+    total: orders.length,
+    confirmed: n((o) => has(o, "wa-confirmed")),
+    waiting: n((o) => !o.cancelledAt && has(o, "wa-pending") && !has(o, "wa-confirmed") && !has(o, "wa-paid")),
+    custCancel: n((o) => has(o, "wa-cancelled")),
+    autoCancel: n((o) => has(o, "wa-auto-cancelled") && !has(o, "wa-blocked")),
+    blocked: n((o) => has(o, "wa-blocked")),
+    highRisk: n((o) => has(o, "wa-high-risk")),
+    codFrozen: n((o) => has(o, "wa-cod-frozen")),
+    paid: n((o) => o.displayFinancialStatus === "PAID" || has(o, "wa-paid")),
+    sale: Math.round(live.reduce((a, o) => a + (Number(o.totalPriceSet?.shopMoney?.amount) || 0), 0)),
+  };
+  const text =
+    `📊 Bazoora summary (${label})\n` +
+    `Orders: ${stats.total}\n` +
+    `Confirmed: ${stats.confirmed}\n` +
+    `Jawab baaki: ${stats.waiting}\n` +
+    `Customer cancel: ${stats.custCancel}\n` +
+    `Auto-cancel: ${stats.autoCancel}\n` +
+    `High-risk: ${stats.highRisk}\n` +
+    `COD band: ${stats.codFrozen}\n` +
+    `Blocked: ${stats.blocked}\n` +
+    `Paid: ${stats.paid}\n` +
+    `Sale (cancel chhod ke): Rs ${stats.sale}`;
+  return { text, label, stats };
+}
+
+async function sendSummary() {
+  const { text, label, stats } = await buildSummary();
+  if (!OWNER_PHONE) return `${text}\n\n(OWNER_PHONE set nahi hai, bheja nahi)`;
+  try {
+    await sendWhatsApp({ to: OWNER_PHONE, type: "text", text: { body: text } });
+    return `${text}\n\n(WhatsApp text me bhej diya)`;
+  } catch (err) {
+    console.log("Summary text nahi gaya (24h window band), template try:", JSON.stringify(err.response?.data?.error?.message || err.message));
+  }
+  if (!SUMMARY_TEMPLATE) return `${text}\n\n(Text nahi gaya aur SUMMARY_TEMPLATE set nahi hai)`;
+  try {
+    const p = (v) => ({ type: "text", text: String(v) });
+    await sendWhatsApp({
+      to: OWNER_PHONE,
+      type: "template",
+      template: {
+        name: SUMMARY_TEMPLATE,
+        language: { code: SUMMARY_TEMPLATE_LANG },
+        components: [
+          {
+            type: "body",
+            parameters: [
+              p(label),
+              p(stats.total),
+              p(stats.confirmed),
+              p(stats.waiting),
+              p(stats.custCancel + stats.autoCancel),
+              p(stats.highRisk),
+              p(stats.codFrozen),
+              p(stats.paid),
+              p(stats.sale),
+            ],
+          },
+        ],
+      },
+    });
+    return `${text}\n\n(Template se bhej diya)`;
+  } catch (err) {
+    console.error("Summary template error:", JSON.stringify(err.response?.data || err.message));
+    return `${text}\n\n(Template bhi nahi gaya, Render logs dekho)`;
+  }
+}
+
+app.get("/cron/daily-summary", async (req, res) => {
+  if (!CRON_SECRET || req.query.key !== CRON_SECRET) return res.status(403).send("Forbidden");
+  try {
+    const out = req.query.dry === "1" ? (await buildSummary()).text : await sendSummary();
+    res.status(200).type("text/plain").send(out);
+  } catch (err) {
+    console.error("daily-summary error:", err.response?.data || err.message);
+    res.status(500).send("error");
+  }
+});
+
 // Backup: agar Shopify ka orders/paid webhook na pahunche, to paid ho chuke orders ko yahan se message jata hai
 async function runPaidSweep({ dry = false } = {}) {
   const out = [];
@@ -1844,6 +2131,13 @@ app.get("/cron/auto-cancel", async (req, res) => {
       out.push(...(await runPaidSweep({ dry })));
     } catch (e) {
       out.push("paid sweep error: " + (e.response?.data?.error || e.message));
+    }
+    if (!dry) {
+      try {
+        out.push(...(await runPostDelivery()));
+      } catch (e) {
+        out.push("post-delivery error: " + (e.response?.data?.error || e.message));
+      }
     }
     console.log("Auto-cancel run:", out.join(" | "));
     res.status(200).type("text/plain").send(out.join("\n"));
