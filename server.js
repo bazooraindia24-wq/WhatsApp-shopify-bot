@@ -23,12 +23,12 @@ const {
 
 const SHOPIFY_API_VERSION = "2025-01";
 const GRAPH_VERSION = "v21.0";
+
 const TEMPLATE_NAME = "order_confirmation";
 const TEMPLATE_LANG = "en";
 
 const REMINDER_TEMPLATE = "delivery_reminder";
 const REMINDER_LANG = "en";
-
 // Fulfill ke kitne din baad reminder (default 3)
 const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 3);
 
@@ -142,7 +142,8 @@ Support timing: subah 9 baje se raat 9 baje
 Support contact: 91 00000000
 `;
 
-function buildSystemPrompt(productsText, ordersText) {
+// [CHANGE 1] extra = UPI intezaar jaisi current situation (khali ho sakta hai)
+function buildSystemPrompt(productsText, ordersText, extra = "") {
   return `You are the WhatsApp customer support assistant for an online store called Bazoora (India). You talk like a friendly, polite shop assistant.
 
 STORE INFORMATION:
@@ -153,7 +154,7 @@ ${productsText || "(not available right now)"}
 
 THIS CUSTOMER'S RECENT ORDERS (live from Shopify, matched by the customer's own WhatsApp number):
 ${ordersText || "(no orders found for this number)"}
-
+${extra ? "\nCURRENT SITUATION:\n" + extra + "\n" : ""}
 RULES:
 1. Reply in the same language and style the customer uses (Hinglish in Roman script by default; Hindi or English if they write that way).
 2. Be warm and natural. Answer greetings and small talk in kind: "Hello" gets a friendly hello and an offer to help; "thanks" gets "you're welcome"; "how are you" gets a short friendly answer, then ask how you can help; good morning/evening, ok, bye etc. get a natural short reply. If the customer uses a cultural or religious greeting (Namaste, Assalamualaikum, Sat Sri Akal, Jai Shri Ram etc.), reply with the matching respectful greeting.
@@ -178,12 +179,10 @@ const remindedOrders = new Set();
 let reminderRunning = false;
 
 // ---------- Gemini helper ----------
-
 async function askGemini(promptText) {
   if (!GEMINI_API_KEY) return null;
   const models = [GEMINI_MODEL];
   if (GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== GEMINI_MODEL) models.push(GEMINI_FALLBACK_MODEL);
-
   for (const model of models) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
@@ -211,7 +210,6 @@ async function askGeminiChat(systemText, contents) {
   if (!GEMINI_API_KEY) return null;
   const models = [GEMINI_MODEL];
   if (GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== GEMINI_MODEL) models.push(GEMINI_FALLBACK_MODEL);
-
   for (const model of models) {
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
@@ -252,13 +250,11 @@ async function askGeminiChat(systemText, contents) {
 }
 
 // ---------- Inbox storage ----------
-
 const INBOX_FILE = "inbox-data.json";
 const conversations = new Map();
 
 // MongoDB na ho (ya connect na ho) to purani tarah file me save hota hai (deploy par ud jata hai)
 let db = null;
-
 try {
   const saved = JSON.parse(fs.readFileSync(INBOX_FILE, "utf8"));
   for (const [k, v] of Object.entries(saved)) conversations.set(k, v);
@@ -273,7 +269,6 @@ async function initDb() {
   const client = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
   await client.connect();
   db = client.db(MONGODB_DB);
-
   const docs = await db.collection("conversations").find({}).toArray();
   conversations.clear();
   for (const d of docs) {
@@ -419,7 +414,6 @@ function fmtTime(t) {
 }
 
 // ---------- AI Support helpers ----------
-
 // true = reply do, "notify" = limit abhi lagi (customer ko ek baar batao), false = chup raho
 function aiAllowed(phone) {
   const now = Date.now();
@@ -470,7 +464,6 @@ function markNeedsHuman(phone, value) {
 // ---------- UPI payment ka intezaar (PENDING_UPI_PAYMENT) ----------
 // Jab customer ko UPI payment manga jata hai: order par tag wa-awaiting-upi + chat me "awaiting" yaad rakhte hain.
 // Jab tak payment verify na ho (aap Mark as paid karo), Confirm ya koi bhi message order confirm nahi karta, sirf reminder jata hai.
-
 function setAwaiting(phone, info) {
   let c = conversations.get(phone);
   if (!c) {
@@ -501,15 +494,136 @@ function upiReminderText(a) {
   return lines.join("\n");
 }
 
+// [CHANGE 4] Reminder limits (Render Environment me badal sakte ho)
+const UPI_REMINDER_MAX = Number(process.env.UPI_REMINDER_MAX ?? 2); // ek order par max itne auto reminder
+const UPI_REMINDER_GAP_MIN = Number(process.env.UPI_REMINDER_GAP_MIN ?? 30); // do reminder ke beech kam se kam itne minute
 const upiRemindedAt = new Map();
-async function sendUpiReminder(phone, aw) {
-  // Ek saath kai message aaye to ek hi reminder (30 second me)
-  if (Date.now() - (upiRemindedAt.get(phone) || 0) < 30000) return;
-  upiRemindedAt.set(phone, Date.now());
-  const messageText = upiReminderText(aw);
-await sendText(phone, messageText);
 
-  addMessage(phone, "out", messagetext);
+// force=true: customer ne khud poocha (button / "confirm?" / "UPI ID?"), tab count limit nahi lagti
+async function sendUpiReminder(phone, aw, force = false) {
+  const st = conversations.get(phone)?.awaiting;
+  if (st && !force) {
+    if ((st.reminders || 0) >= UPI_REMINDER_MAX) {
+      markNeedsHuman(phone, true); // loop nahi: team ko red nishan, bot chup
+      return false;
+    }
+    if (Date.now() - (st.lastReminderAt || 0) < UPI_REMINDER_GAP_MIN * 60000) return false;
+  }
+  // Ek saath kai message aaye to ek hi reminder (30 second me)
+  if (Date.now() - (upiRemindedAt.get(phone) || 0) < 30000) return false;
+  upiRemindedAt.set(phone, Date.now());
+  if (st) {
+    st.reminders = (st.reminders || 0) + 1;
+    st.lastReminderAt = Date.now();
+    queueSave(phone);
+  }
+  const text = upiReminderText(aw || st);
+  await sendText(phone, text);
+  addMessage(phone, "out", text);
+  return true;
+}
+
+// [CHANGE 5] Customer ka message kis type ka hai (bina AI, regex se)
+function detectUpiIntent(text) {
+  const t = String(text || "").toLowerCase().trim();
+  if (!t) return "other";
+  // 1) payment me dikkat / scam ka shak -> insaan dekhe
+  if (/(fail|failed|nahi ho raha|nhi ho raha|nahi ho rha|nhi ho rha|error|deduct|paise kat|kat gaye|kat gaya|kat gya|refund|stuck|atak|scam|fraud|fake)/.test(t))
+    return "problem";
+  // 2) "prepaid kyun", "COD kyun nahi", "COD chahiye"
+  const whyWord = /(kyun|kyu|kyon|kiyu|why|kisliye|kis liye|wajah|reason|karan)/;
+  const payTopic = /(prepaid|cod|cash|online|payment|pay|upi|advance)/;
+  if ((whyWord.test(t) && payTopic.test(t)) || /\bcod\b|cash on delivery/.test(t)) return "why";
+  // 3) "payment ho gaya / kar diya"
+  const payWord = /(payment|pay|paid|paise|paisa|upi|transfer|sent|send|bhej)/;
+  const doneWord = /(ho gaya|hogaya|ho gya|hogya|kar diya|kar di|kr diya|kr di|bhej diya|bhej di|bhej dia|kiya hai|done|paid|successful|completed|complete)/;
+  if ((payWord.test(t) && doneWord.test(t)) || /^(done|paid|ho gaya|hogaya|kar diya|kr diya)\b/.test(t)) return "paid";
+  // 4) order confirm kab / status
+  if (/(confirm|order status|status|kab.*(dispatch|aayega|milega|bhejoge))/.test(t)) return "confirm";
+  // 5) UPI ID / amount dobara maang raha hai
+  if (/(upi id|upi\b.*(kya|batao|bhejo|do)|kitna|kitne|amount|kahan|kahaan|kidhar|qr|link)/.test(t)) return "details";
+  return "other";
+}
+
+function upiWhyText(a) {
+  const lines = [
+    "🙏 Aapka sawal bilkul sahi hai.",
+    "",
+    "Security aur address/pincode verification ke kaaran is order par Cash on Delivery abhi temporarily available nahi hai. Ye sirf aapke order ko safe tareeke se process karne ke liye hai 😊",
+  ];
+  if (a?.kind === "offer" && a?.offerLabel) {
+    lines.push("", `Online payment par aapko ${a.offerLabel} ka discount mil raha hai. Final amount: ₹${a.amount}`);
+  } else if (a?.amount) {
+    lines.push("", `💰 Amount: ₹${a.amount}`);
+  }
+  lines.push("", `📲 UPI: ${a?.upi || UPI_ID}`, "", "Payment ke baad screenshot isi chat me bhej dein, verify hote hi order confirm ho jayega ✅");
+  return lines.join("\n");
+}
+
+// UPI payment ka intezaar chal raha ho tab har message yahan aata hai
+async function handleAwaitingMessage(msg, aw) {
+  const phone = msg.from;
+  const text = msg.type === "text" ? msg.text?.body || "" : "";
+  const intent = msg.type === "text" ? detectUpiIntent(text) : "other";
+  const now = Date.now();
+  const say = async (t) => {
+    await sendText(phone, t);
+    addMessage(phone, "out", t);
+  };
+
+  // Loop guard: 10 minute me wahi intent dobara aaye to dobara wahi jawab nahi, team ko flag
+  if (aw.lastIntent === intent && now - (aw.lastIntentAt || 0) < 10 * 60000) {
+    markNeedsHuman(phone, true);
+    return;
+  }
+  aw.lastIntent = intent;
+  aw.lastIntentAt = now;
+  queueSave(phone);
+
+  if (intent === "problem") {
+    markNeedsHuman(phone, true);
+    await say(HUMAN_HANDOFF_TEXT);
+    return;
+  }
+  if (intent === "why") {
+    await say(upiWhyText(aw));
+    return;
+  }
+  if (intent === "paid") {
+    // Payment kabhi apne aap verify/confirm nahi karte, sirf team (Mark as paid) karegi
+    markNeedsHuman(phone, true);
+    await say("Shukriya 🙏 Hum aapka payment verify kar rahe hain. Verify hote hi order confirm ho jayega ✅\nAgar abhi tak screenshot nahi bheja hai to isi chat me bhej dein 📸");
+    return;
+  }
+  if (intent === "confirm" || intent === "details") {
+    await sendUpiReminder(phone, aw, true); // customer ne khud poocha
+    return;
+  }
+  // intent === "other": general sawal / greeting
+  if (AI_REPLY && msg.type === "text" && GEMINI_API_KEY) {
+    const extra =
+      `This customer's order ${aw.orderName || ""} is waiting for UPI payment (Rs ${aw.amount || "-"}, UPI ID ${aw.upi || UPI_ID}). ` +
+      `Cash on Delivery is temporarily unavailable for this order because of security and address/pincode verification` +
+      (aw.kind === "offer" && aw.offerLabel ? `; online payment gets ${aw.offerLabel} discount (final Rs ${aw.amount}).` : ".") +
+      ` Answer the customer's actual question first. Do NOT repeat the payment reminder unless they ask for it. ` +
+      `Never say the customer is "high risk". Never say the payment is received or the order is confirmed. ` +
+      `If they say they paid or send a screenshot, reply HUMAN.`;
+    await handleAiReply(msg, extra);
+    return;
+  }
+  // AI band hai: reminder sirf limit ke andar, uske baad team ko flag (loop nahi)
+  await sendUpiReminder(phone, aw, false);
+}
+
+// Payment ka screenshot aaya (ack 10 minute me ek hi baar)
+async function ackPaymentScreenshot(phone, aw) {
+  markNeedsHuman(phone, true);
+  if (Date.now() - (aw.shotAckAt || 0) < 10 * 60000) return;
+  aw.shotAckAt = Date.now();
+  queueSave(phone);
+  const t = "Screenshot mil gaya 🙏 Hum payment verify karke jaldi order confirm kar denge ✅";
+  await sendText(phone, t);
+  addMessage(phone, "out", t);
 }
 
 async function getOrderInfo(orderId) {
@@ -543,7 +657,6 @@ async function activeAwaiting(phone) {
 }
 
 // ---------- Shopify se live jaankari (AI ke liye) ----------
-
 let productsCache = { time: 0, text: "" };
 async function getProductsText() {
   if (Date.now() - productsCache.time < 10 * 60 * 1000) return productsCache.text;
@@ -629,7 +742,8 @@ async function getCustomerOrdersText(phone) {
   }
 }
 
-async function handleAiReply(msg) {
+// [CHANGE 2] extra = UPI intezaar jaisi current situation
+async function handleAiReply(msg, extra = "") {
   const phone = msg.from;
   const allowed = aiAllowed(phone);
   if (allowed !== true) {
@@ -641,22 +755,19 @@ async function handleAiReply(msg) {
     }
     return;
   }
-
   const contents = buildHistory(phone);
   if (!contents.length) return;
-
   const [productsText, ordersText] = await Promise.all([
     getProductsText(),
     getCustomerOrdersText(phone),
   ]);
-  const aiReply = await askGeminiChat(buildSystemPrompt(productsText, ordersText), contents);
+  const aiReply = await askGeminiChat(buildSystemPrompt(productsText, ordersText, extra), contents);
   if (!aiReply) {
     markNeedsHuman(phone, true);
     await sendText(phone, HUMAN_HANDOFF_TEXT);
     addMessage(phone, "out", HUMAN_HANDOFF_TEXT);
     return;
   }
-
   const reply = aiReply.trim();
   if (reply.toUpperCase().startsWith("HUMAN")) {
     markNeedsHuman(phone, true);
@@ -664,13 +775,11 @@ async function handleAiReply(msg) {
     addMessage(phone, "out", HUMAN_HANDOFF_TEXT);
     return;
   }
-
   await sendText(phone, reply);
   addMessage(phone, "out", reply);
 }
 
 // ---------- Helpers ----------
-
 function cleanPhone(raw) {
   if (!raw) return null;
   const digits = String(raw).replace(/\D/g, "");
@@ -701,7 +810,6 @@ function formatTotal(order) {
 }
 
 // ---------- COD pehchan + High-risk points (bina AI) ----------
-
 function isCodOrder(order) {
   const gateways = order.payment_gateway_names || [];
   if (gateways.some((g) => /\bcod\b|cash on delivery/i.test(String(g)))) return true;
@@ -747,31 +855,25 @@ async function assessRisk(order, phone, { problems, cod, total, rtoPin }) {
     score += pts;
     reasons.push(`${why} +${pts}`);
   };
-
   if (problems.length) add(RISK_POINTS.addressProblem, "address problem");
   if (cod && total > COD_LIMIT) add(RISK_POINTS.codHigh, `COD ${total} > ${COD_LIMIT}`);
   if (rtoPin) add(RISK_POINTS.rtoPincode, "RTO pincode");
-
   let trusted = false;
   try {
     const prior = await getPhoneHistory(phone, order.id);
     if (prior.some((o) => o.tags.includes("wa-trusted"))) trusted = true;
-
     const last24h = prior.filter((o) => Date.now() - o.createdAt < 86400000).length;
     if (last24h + 1 >= 3) add(RISK_POINTS.manyOrders, `24 ghante me ${last24h + 1} orders`);
-
     if (prior.some((o) => o.cancelled || o.tags.includes("wa-cancelled")))
       add(RISK_POINTS.prevCancelled, "pehle order cancel hua");
     if (prior.some((o) => o.tags.includes("rto"))) add(RISK_POINTS.prevRto, "pehle parcel wapas aaya");
   } catch (err) {
     console.error("risk history error:", err.response?.data || err.message);
   }
-
   return { score, reasons, trusted };
 }
 
 // ---------- Address verify (bina AI: pincode + fuzzy match) ----------
-
 // Hinglish spelling ka farak hatane ke liye (Muhalla/Mohalla, Jaipur/Jeypur)
 function normText(s = "") {
   return String(s)
@@ -838,7 +940,6 @@ function foundInText(needle, text) {
 }
 
 const pinCache = new Map();
-
 // India Post ki free pincode API: pincode asli hai ya nahi, aur kis state/district/area ka hai
 // found:true/false deta hai; API na chale to null (tab tag nahi lagta)
 async function lookupPincode(pin) {
@@ -879,38 +980,31 @@ function normState(s) {
 async function checkAddress(addr) {
   const problems = [];
   let pinInfo = null;
-
   if (!addr) {
     problems.push("shipping address nahi hai");
     return { problems, pinInfo, unknown: false };
   }
-
   // 1. Country
   const country = String(addr.country_code || addr.country || "").trim();
   if (country && !/^(in|india|bharat)$/i.test(country)) problems.push("country India nahi hai");
-
   // 2. Address line: ghar number zaroori nahi, par kuch locality/mohalla/landmark text hona chahiye
   const line = cleanText([addr.address1, addr.address2].filter(Boolean).join(" "));
   if (line.length < 4) problems.push("address line bahut chhoti/khali");
   else if (!/[a-z\u0900-\u097f]{3,}/i.test(line)) problems.push("address me mohalla/gaon/landmark nahi, sirf number hai");
-
   // 3. City
   if (!cleanText(addr.city)) problems.push("city nahi hai");
-
   // 4. Pincode
   const pin = String(addr.zip || "").replace(/\s/g, "");
   if (!/^[1-9]\d{5}$/.test(pin)) {
     problems.push("pincode ka format galat");
     return { problems, pinInfo, unknown: false };
   }
-
   pinInfo = await lookupPincode(pin);
   if (!pinInfo) return { problems, pinInfo, unknown: true };
   if (pinInfo.found === false) {
     problems.push("pincode exist nahi karta");
     return { problems, pinInfo, unknown: false };
   }
-
   // 5. State (pincode ke state se match)
   if (addr.province) {
     const a = normState(addr.province);
@@ -920,11 +1014,10 @@ async function checkAddress(addr) {
   } else {
     problems.push("state nahi hai");
   }
-
   // 6. City: sirf halka warning (address galat nahi maante, customer se galti ho sakti hai)
   //    city pincode ke district ya kisi post office ke naam se na mile to warning
   const warnings = [];
-   const cityTxt = cleanText(addr.city);
+  const cityTxt = cleanText(addr.city);
   if (cityTxt) {
     const candidates = [...(pinInfo.districts || []), ...(pinInfo.names || [])];
     const cityOk = candidates.some((n) => sim(n, cityTxt) >= 0.75 || foundInText(n, cityTxt));
@@ -934,7 +1027,6 @@ async function checkAddress(addr) {
       );
     }
   }
-
   return { problems, warnings, pinInfo, unknown: false };
 }
 
@@ -944,18 +1036,13 @@ let tokenExpiresAt = 0;
 async function getShopifyToken() {
   const clientSecret = (SHOPIFY_CLIENT_SECRET || "").trim();
   if (!clientSecret) return SHOPIFY_ACCESS_TOKEN;
-
   if (cachedToken && Date.now() < tokenExpiresAt - 60000) return cachedToken;
-
   const body = new URLSearchParams({
     grant_type: "client_credentials",
     client_id: (SHOPIFY_API_KEY || "").trim(),
     client_secret: clientSecret,
   });
-  const res = await axios.post(
-    `https://${SHOPIFY_STORE}/admin/oauth/access_token`,
-    body
-  );
+  const res = await axios.post(`https://${SHOPIFY_STORE}/admin/oauth/access_token`, body);
   cachedToken = res.data.access_token;
   tokenExpiresAt = Date.now() + (res.data.expires_in || 86400) * 1000;
   console.log("Naya Shopify token mil gaya");
@@ -1020,7 +1107,6 @@ async function sendText(to, text) {
 }
 
 // ---------- Payment received message (bina button) ----------
-
 function verifyShopifyHmac(req) {
   const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
   const secret = (SHOPIFY_API_SECRET || "").trim();
@@ -1113,7 +1199,6 @@ app.post(
 );
 
 // ---------- Prepaid offer: product ke tag se discount (discount-50 = Rs 50, discount-10% = 10%) ----------
-
 async function getProductTags(productIds) {
   const ids = [...new Set(productIds.filter(Boolean).map((x) => `gid://shopify/Product/${x}`))];
   const map = new Map();
@@ -1217,12 +1302,15 @@ async function trySendPrepaidOffer({ order, phone, customerName, cod, total, ris
       },
     });
     await addTags(order.id, ["wa-prepaid-offered", "wa-awaiting-upi"]);
+    // [CHANGE 3a] kind + offerLabel jode
     setAwaiting(phone, {
       orderId: String(order.id),
       orderName: String(order.name),
       amount: String(offer.finalAmount),
       upi: UPI_ID,
       since: Date.now(),
+      kind: "offer",
+      offerLabel: offer.label,
     });
     addMessage(phone, "out", `[Prepaid offer] Order ${order.name}: ${offer.label} off, Rs ${offer.finalAmount}`);
     console.log(`Order ${order.name}: prepaid offer bheja (${why}) ${offer.label} off, payable Rs ${offer.finalAmount}. Ab UPI payment ka intezaar`);
@@ -1234,7 +1322,6 @@ async function trySendPrepaidOffer({ order, phone, customerName, cod, total, ris
 }
 
 // ---------- Shopify webhook: orders/create ----------
-
 app.post(
   "/webhooks/orders-create",
   express.raw({ type: "application/json" }),
@@ -1245,11 +1332,9 @@ app.post(
       .createHmac("sha256", secret)
       .update(req.body)
       .digest("base64");
-
     const a = Buffer.from(digest);
     const b = Buffer.from(hmacHeader);
     const valid = a.length === b.length && crypto.timingSafeEqual(a, b);
-
     if (!valid) {
       console.warn(
         `Invalid Shopify HMAC | secret length: ${secret.length} | header present: ${hmacHeader.length > 0}`
@@ -1269,6 +1354,7 @@ app.post(
           order.customer?.phone ||
           order.billing_address?.phone
       );
+
       if (!phone) {
         console.warn(`Order ${order.name}: valid phone nahi mila`);
         await addTags(order.id, ["wa-no-phone"]);
@@ -1321,14 +1407,13 @@ app.post(
       // ---- Pehle address aur risk dekhte hain (bina AI), taaki sahi message jaye ----
       let addrResult = null;
       try {
-        addrResult = await checkAddress(order.shipping_address);
+         addrResult = await checkAddress(order.shipping_address);
       } catch (err) {
         console.error("address check error:", err.response?.data || err.message);
       }
       const problems = addrResult?.problems || [];
       const warnings = addrResult?.warnings || [];
       const addrUnknown = !addrResult || addrResult.unknown;
-
       const pin = String(order.shipping_address?.zip || "").replace(/\s/g, "");
       const rtoPin = RTO_PINCODES.has(pin);
       const cod = isCodOrder(order);
@@ -1336,7 +1421,6 @@ app.post(
 
       // COD freeze: COD order, aur (address me problem + amount limit se zyada) ya (pincode RTO list me)
       const freezeCod = cod && ((problems.length > 0 && total > COD_LIMIT) || rtoPin);
-
       let sentMessage = false;
       let codFrozen = false;
 
@@ -1376,7 +1460,15 @@ app.post(
             const freezeWhy = rtoPin ? `pincode ${pin} RTO list me` : problems.join(" | ");
             console.log(`Order ${order.name}: COD freeze message bheja -> ${phone} (${freezeWhy})`);
             await addTags(order.id, ["wa-cod-frozen", "wa-awaiting-upi"]);
-            setAwaiting(phone, { orderId: String(order.id), orderName: String(order.name), amount: String(Math.round(total)), upi: UPI_ID, since: Date.now() });
+            // [CHANGE 3b] kind: "frozen" joda
+            setAwaiting(phone, {
+              orderId: String(order.id),
+              orderName: String(order.name),
+              amount: String(Math.round(total)),
+              upi: UPI_ID,
+              since: Date.now(),
+              kind: "frozen",
+            });
             addMessage(
               phone,
               "out",
@@ -1399,6 +1491,7 @@ app.post(
       } catch (err) {
         console.error("risk check error:", err.response?.data || err.message);
       }
+
       let offerSent = false;
       if (!codFrozen && !prepaid) {
         offerSent = await trySendPrepaidOffer({ order, phone, customerName, cod, total, risk, phoneHist, codFrozen });
@@ -1409,36 +1502,36 @@ app.post(
         const imageUrl = await getProductImage(order.line_items?.[0]?.product_id);
 
         const components = [
-        {
-          type: "body",
-          parameters: [
-            { type: "text", text: customerName },
-            { type: "text", text: String(order.name) },
-            { type: "text", text: items || "-" },
-            { type: "text", text: formatTotal(order) },
-            { type: "text", text: address },
-          ],
-        },
-        {
-          type: "button",
-          sub_type: "quick_reply",
-          index: "0",
-          parameters: [{ type: "payload", payload: `CONFIRM_${order.id}` }],
-        },
-        {
-          type: "button",
-          sub_type: "quick_reply",
-          index: "1",
-          parameters: [{ type: "payload", payload: `CANCEL_${order.id}` }],
-        },
-      ];
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: customerName },
+              { type: "text", text: String(order.name) },
+              { type: "text", text: items || "-" },
+              { type: "text", text: formatTotal(order) },
+              { type: "text", text: address },
+            ],
+          },
+          {
+            type: "button",
+            sub_type: "quick_reply",
+            index: "0",
+            parameters: [{ type: "payload", payload: `CONFIRM_${order.id}` }],
+          },
+          {
+            type: "button",
+            sub_type: "quick_reply",
+            index: "1",
+            parameters: [{ type: "payload", payload: `CANCEL_${order.id}` }],
+          },
+        ];
 
-      if (imageUrl) {
-        components.unshift({
-          type: "header",
-          parameters: [{ type: "image", image: { link: imageUrl } }],
-        });
-      }
+        if (imageUrl) {
+          components.unshift({
+            type: "header",
+            parameters: [{ type: "image", image: { link: imageUrl } }],
+          });
+        }
 
         try {
           const waRes = await sendWhatsApp({
@@ -1509,8 +1602,7 @@ async function ackMedia(phone) {
   const last = mediaAcked.get(phone) || 0;
   if (Date.now() - last < 3600 * 1000) return;
   mediaAcked.set(phone, Date.now());
-  const text =
-    "Aapka message humne dekh liya hai 🙏 Hamari team check karke jaldi aapko confirm karegi 😊";
+  const text = "Aapka message humne dekh liya hai 🙏 Hamari team check karke jaldi aapko confirm karegi 😊";
   await sendText(phone, text);
   addMessage(phone, "out", text);
 }
@@ -1529,7 +1621,6 @@ app.get("/webhook", (req, res) => {
 // ---------- Meta webhook: customer replies + delivery status ----------
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
-
   try {
     const entries = req.body?.entry || [];
     for (const entry of entries) {
@@ -1566,8 +1657,9 @@ app.post("/webhook", async (req, res) => {
 
             if (awaitingUpi) {
               // Payment verify nahi hui: confirm nahi karte, UPI ka reminder dete hain
+              // [CHANGE 6] force=true, kyunki customer ne button khud dabaya
               const aw = conversations.get(msg.from)?.awaiting;
-              await sendUpiReminder(msg.from, aw && String(aw.orderId) === String(orderId) ? aw : null);
+              await sendUpiReminder(msg.from, aw && String(aw.orderId) === String(orderId) ? aw : null, true);
             } else if (alreadyAutoCancelled) {
               await sendText(
                 msg.from,
@@ -1586,19 +1678,25 @@ app.post("/webhook", async (req, res) => {
               clearAwaiting(msg.from, orderId);
               await sendText(
                 msg.from,
-                "Hello! 🙏 Aapka cancel request humne note kar liya hai, aur hamari team jaldi ise process kar degi 😊\n\nUmeed hai future mein hum aapki seva kar paayenge 🛍️✨\nBazoora chunne ke liye Thank you! ❤️"
+                "Hello! 🙏 Aapka cancel request humne note kar liya hai, aur hamari team jaldi ise process kar degi 😊\n\nUmeed hai future mein hum aapki seva kar paayenge 🛍✨\nBazoora chunne ke liye Thank you! ❤️"
               );
             }
             console.log(`Reply: ${action} order ${orderId}`);
           } else if (media) {
-            // Photo/video/screenshot: inbox me red nishan + customer ko ek chhota fixed reply (AI nahi)
-            markNeedsHuman(msg.from, true);
-            await ackMedia(msg.from);
+            // [CHANGE 7] UPI intezaar me screenshot aaye to payment-verify wala reply, warna purana fixed reply
+            const awM = conversations.get(msg.from)?.awaiting;
+            if (awM) {
+              await ackPaymentScreenshot(msg.from, awM);
+            } else {
+              // Photo/video/screenshot: inbox me red nishan + customer ko ek chhota fixed reply (AI nahi)
+              markNeedsHuman(msg.from, true);
+              await ackMedia(msg.from);
+            }
           } else {
-            // UPI payment ka intezaar chal raha ho to AI nahi, sirf payment ka reminder
+            // [CHANGE 7] UPI payment ka intezaar chal raha ho to smart intent reply (loop nahi)
             const aw = await activeAwaiting(msg.from);
             if (aw) {
-              await sendUpiReminder(msg.from, aw);
+              await handleAwaitingMessage(msg, aw);
             } else if (AI_REPLY && msg.type === "text" && GEMINI_API_KEY) {
               await handleAiReply(msg);
             }
@@ -1612,7 +1710,6 @@ app.post("/webhook", async (req, res) => {
 });
 
 // ---------- Inbox page ----------
-
 function inboxAuth(req, res) {
   const key = req.query.key || req.body?.key;
   if (!INBOX_SECRET || key !== INBOX_SECRET) {
@@ -1629,8 +1726,7 @@ function page(title, body) {
 <style>
 body{font-family:Arial,sans-serif;margin:0;background:#f3f0ff;color:#222}
 .top{background:#8a2be2;color:#fff;padding:14px;font-weight:bold}
-.top a{color:#fff;text-decoration:none}
-.wrap{padding:12px}
+.top a{color:#fff;text-decoration:none}.wrap{padding:12px}
 .card{display:block;background:#fff;border-radius:10px;padding:12px;margin-bottom:8px;text-decoration:none;color:#222;box-shadow:0 1px 3px rgba(0,0,0,.1)}
 .card small{color:#777;display:block;margin-top:4px}
 .msg{max-width:80%;padding:8px 10px;border-radius:10px;margin:6px 0;white-space:pre-wrap;word-wrap:break-word;font-size:14px}
@@ -1686,16 +1782,14 @@ app.get("/inbox/media", async (req, res) => {
   if (!key) return;
   const id = String(req.query.id || "");
   if (!/^\d{5,30}$/.test(id)) return res.status(400).send("Bad id");
-
   try {
     const auth = { Authorization: `Bearer ${WHATSAPP_TOKEN}` };
     const meta = await axios.get(`https://graph.facebook.com/${GRAPH_VERSION}/${id}`, {
       headers: auth,
       timeout: 15000,
-    });
+      });
     const fileUrl = meta.data?.url;
     if (!fileUrl) return res.status(404).send("File nahi mili");
-
     const file = await axios.get(fileUrl, {
       headers: auth,
       responseType: "arraybuffer",
@@ -1708,7 +1802,6 @@ app.get("/inbox/media", async (req, res) => {
       .trim()
       .toLowerCase();
     const inline = INLINE_MIMES.has(mime);
-
     res.set({
       "Content-Type": inline ? mime : "application/octet-stream",
       "Content-Disposition": inline ? "inline" : "attachment",
@@ -1717,7 +1810,6 @@ app.get("/inbox/media", async (req, res) => {
       "Cache-Control": "private, max-age=86400",
       "Accept-Ranges": "bytes",
     });
-
     // Video/audio ke liye Range support (seek aur Safari ke liye)
     const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || "");
     if (range && (range[1] || range[2])) {
@@ -1796,7 +1888,6 @@ ${x.c.needsHuman ? "🔴 " : ""}<b>${esc(x.c.name || "Customer")}</b> (+${esc(x.
     return res
       .status(404)
       .send(page("Inbox", `<div class="wrap">Chat nahi mili. <a href="/inbox?key=${k}">Wapas</a></div>`));
-
   const lastIn = [...c.messages].reverse().find((m) => m.dir === "in");
   const within24 = lastIn && Date.now() - lastIn.time < 24 * 3600 * 1000;
   const bubbles = c.messages
@@ -1816,7 +1907,6 @@ ${x.c.needsHuman ? "🔴 " : ""}<b>${esc(x.c.name || "Customer")}</b> (+${esc(x.
   const warn = within24
     ? ""
     : `<div class="warn">Customer ke aakhri message ko 24 ghante se zyada ho gaye. Reply shayad na jaye.</div>`;
-
   res.send(
     page(
       "Chat",
@@ -1839,7 +1929,6 @@ app.post("/inbox/reply", async (req, res) => {
   const phone = String(req.body.phone || "");
   const text = String(req.body.text || "").trim();
   if (!phone || !text) return res.redirect(303, `/inbox?key=${k}`);
-
   try {
     await sendWhatsApp({ to: phone, type: "text", text: { body: text } });
     addMessage(phone, "out", text);
@@ -1857,14 +1946,12 @@ app.post("/inbox/reply", async (req, res) => {
 });
 
 // ---------- Delivery reminder (roz cron-job.org se chalega) ----------
-
 async function runReminders() {
   if (reminderRunning) {
     console.log("Reminder check pehle se chal raha hai, ye skip");
     return;
   }
   reminderRunning = true;
-
   try {
     const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
     const search = `fulfillment_status:fulfilled -tag:wa-reminded -tag:wa-cancelled created_at:>=${since}`;
@@ -1880,7 +1967,6 @@ async function runReminders() {
         }
       }
     }`;
-
     const data = await shopifyGraphQL(q, { q: search });
     const orders = data?.data?.orders?.nodes || [];
     console.log(`Reminder check: ${orders.length} fulfilled order(s) mile (REMINDER_DAYS=${REMINDER_DAYS})`);
@@ -1953,7 +2039,6 @@ app.get("/cron/reminders", (req, res) => {
 });
 
 // ---------- Auto-cancel: unpaid order, 24 ghante me koi jawab nahi ----------
-
 async function cancelShopifyOrder(orderId, note) {
   const m = `mutation($id: ID!, $note: String) {
     orderCancel(orderId: $id, reason: OTHER, refund: false, restock: true, notifyCustomer: false, staffNote: $note) {
@@ -1973,14 +2058,12 @@ async function getOrderTags(orderId) {
 }
 
 let autoCancelRunning = false;
-
 async function runAutoCancel({ dry = false } = {}) {
   const out = [];
   if (!AUTO_CANCEL) return ["AUTO_CANCEL=off hai, kuch nahi kiya"];
   if (!db) return ["MongoDB connected nahi hai, safety ke liye auto-cancel skip"];
   if (autoCancelRunning) return ["Pehle se chal raha hai"];
   autoCancelRunning = true;
-
   try {
     const cutoff = new Date(Date.now() - AUTO_CANCEL_HOURS * 3600000);
     const oldest = new Date(Date.now() - 7 * 86400000).toISOString();
@@ -2040,12 +2123,10 @@ async function runAutoCancel({ dry = false } = {}) {
         out.push(`${o.name}: skip (customer ne reply kiya)`);
         continue;
       }
-
       if (dry) {
         out.push(`${o.name}: DRY RUN, cancel hota (phone ${phone})`);
         continue;
       }
-
       const cr = await cancelShopifyOrder(orderId, `Auto-cancel: customer ne ${AUTO_CANCEL_HOURS} ghante me reply/payment nahi kiya`);
       if (!cr.ok) {
         out.push(`${o.name}: cancel fail ${JSON.stringify(cr.errs)}`);
@@ -2089,9 +2170,7 @@ async function runAutoCancel({ dry = false } = {}) {
 }
 
 // ---------- Delivery ke baad: RTO tag + review request ----------
-
 let lastPostDelivery = 0;
-
 async function runPostDelivery({ force = false } = {}) {
   const out = [];
   // 5 minute ke cron se bulane par bhi sirf 30 minute me ek baar
@@ -2173,7 +2252,6 @@ async function runPostDelivery({ force = false } = {}) {
 }
 
 // ---------- Roz ka summary (kal ke orders) ----------
-
 async function buildSummary() {
   // Kal ka din, India time (IST) ke hisaab se
   const IST = 5.5 * 3600000;
@@ -2199,6 +2277,7 @@ async function buildSummary() {
   const has = (o, t) => (o.tags || []).includes(t);
   const n = (f) => orders.filter(f).length;
   const live = orders.filter((o) => !o.cancelledAt);
+
   const stats = {
     total: orders.length,
     confirmed: n((o) => has(o, "wa-confirmed")),
@@ -2211,6 +2290,7 @@ async function buildSummary() {
     paid: n((o) => o.displayFinancialStatus === "PAID" || has(o, "wa-paid")),
     sale: Math.round(live.reduce((a, o) => a + (Number(o.totalPriceSet?.shopMoney?.amount) || 0), 0)),
   };
+
   const text =
     `📊 Bazoora summary (${label})\n` +
     `Orders: ${stats.total}\n` +
@@ -2365,3 +2445,4 @@ app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
   }
   app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
 })();
+    
