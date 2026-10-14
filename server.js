@@ -2,9 +2,7 @@ const express = require("express");
 const crypto = require("crypto");
 const axios = require("axios");
 const fs = require("fs");
-
 const app = express();
-
 const {
   PORT = 3000,
   SHOPIFY_STORE,
@@ -20,15 +18,12 @@ const {
   INBOX_SECRET,
   GEMINI_API_KEY,
 } = process.env;
-
 const SHOPIFY_API_VERSION = "2025-01";
 const GRAPH_VERSION = "v21.0";
 const TEMPLATE_NAME = "order_confirmation";
 const TEMPLATE_LANG = "en";
-
 const REMINDER_TEMPLATE = "delivery_reminder";
 const REMINDER_LANG = "en";
-
 // Fulfill ke kitne din baad reminder (default 3)
 const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 3);
 
@@ -36,7 +31,6 @@ const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 3);
 // MongoDB: inbox ke messages deploy ke baad bhi bache rahein
 const MONGODB_URI = (process.env.MONGODB_URI || "").trim();
 const MONGODB_DB = (process.env.MONGODB_DB || "bazoora").trim();
-
 // COD freeze: is amount se zyada ke COD order par (address problem ho to) COD band
 const COD_LIMIT = Number(process.env.COD_LIMIT ?? 2000);
 const UPI_ID = (process.env.UPI_ID || "").trim();
@@ -44,11 +38,9 @@ const COD_TEMPLATE = process.env.COD_TEMPLATE || "cod_blocked";
 const COD_TEMPLATE_LANG = process.env.COD_TEMPLATE_LANG || "en";
 // Testing ke liye: on karoge to bina payment gateway wale pending (manual) orders ko COD maana jayega
 const COD_TEST_MODE = process.env.COD_TEST_MODE === "on";
-
 // Online payment ke baad "payment received" message (bina button)
 const PAID_TEMPLATE = process.env.PAID_TEMPLATE || "payment_received";
 const PAID_TEMPLATE_LANG = process.env.PAID_TEMPLATE_LANG || "en";
-
 // Auto-cancel: unpaid order par customer 24 ghante me kuch na bole to cancel + restock
 // AUTO_CANCEL=off karke band kar sakte ho
 const AUTO_CANCEL = process.env.AUTO_CANCEL !== "off";
@@ -56,7 +48,6 @@ const AUTO_CANCEL_HOURS = Number(process.env.AUTO_CANCEL_HOURS ?? 24);
 // Optional: cancel hone ka WhatsApp template (customer ne reply nahi kiya to free text nahi ja sakta). Khali = message nahi jayega
 const AUTO_CANCEL_TEMPLATE = (process.env.AUTO_CANCEL_TEMPLATE || "").trim();
 const AUTO_CANCEL_TEMPLATE_LANG = process.env.AUTO_CANCEL_TEMPLATE_LANG || "en";
-
 // High RTO pincodes: comma se alag, jaise 444705,444601 (Render me RTO_PINCODES me badlo)
 const RTO_PINCODES = new Set(
   String(process.env.RTO_PINCODES || "")
@@ -70,7 +61,6 @@ const REVIEW_TEMPLATE = (process.env.REVIEW_TEMPLATE || "").trim();
 const REVIEW_TEMPLATE_LANG = process.env.REVIEW_TEMPLATE_LANG || "en";
 const REVIEW_URL = (process.env.REVIEW_URL || "").trim();
 const REVIEW_DELAY_DAYS = Number(process.env.REVIEW_DELAY_DAYS ?? 2);
-
 // RTO auto tag: Shopify me shipment ka status in me se ho to order par "rto" tag lagta hai (comma se alag)
 const RTO_STATUSES = new Set(
   String(process.env.RTO_STATUSES || "FAILURE")
@@ -78,13 +68,13 @@ const RTO_STATUSES = new Set(
     .filter(Boolean)
     .map((x) => x.toUpperCase())
 );
-
-// Roz ka summary aapke WhatsApp par: OWNER_PHONE zaroori. Template optional (24 ghante ke window ke bahar ke liye)
+// Roz ka summary aapke WhatsApp par: OWNER_PHONE zaroori (apna personal number, bot ka number nahi).
+// Template optional (24 ghante ke window ke bahar ke liye)
 const OWNER_PHONE = cleanPhoneEarly(process.env.OWNER_PHONE);
 const SUMMARY_TEMPLATE = (process.env.SUMMARY_TEMPLATE || "").trim();
 const SUMMARY_TEMPLATE_LANG = process.env.SUMMARY_TEMPLATE_LANG || "en";
-
 // High-risk COD customer ko prepaid offer. Chalu karne ke liye PREPAID_OFFER_TEMPLATE (aur UPI_ID) set karo
+// Product par tag discount-50 (flat Rs 50) ya discount-10% (10 percent) ho to wahi lagega, warna PREPAID_OFFER_PERCENT
 const PREPAID_OFFER_TEMPLATE = (process.env.PREPAID_OFFER_TEMPLATE || "").trim();
 const PREPAID_OFFER_LANG = process.env.PREPAID_OFFER_LANG || "en";
 const PREPAID_OFFER_PERCENT = Number(process.env.PREPAID_OFFER_PERCENT ?? 5);
@@ -103,7 +93,6 @@ const BLOCKED_PHONES = new Set(
     .filter(Boolean)
 );
 const BLOCK_ACTION = process.env.BLOCK_ACTION === "tag" ? "tag" : "cancel";
-
 // High-risk flag: itne ya zyada points hone par wa-high-risk tag
 const HIGH_RISK_SCORE = Number(process.env.HIGH_RISK_SCORE ?? 50);
 const RISK_POINTS = {
@@ -164,7 +153,6 @@ RULES:
 
 const HUMAN_HANDOFF_TEXT =
   "Aapka message humne hamari team ko bhej diya hai 🙏 Woh jaldi hi aapse contact karegi 😊";
-
 // AI spam/loop se bachne ke liye: ek customer ko 1 ghante me max itne AI reply
 const AI_MAX_PER_HOUR = Number(process.env.AI_MAX_PER_HOUR ?? 20);
 const aiUsage = new Map();
@@ -174,12 +162,10 @@ const remindedOrders = new Set();
 let reminderRunning = false;
 
 // ---------- Gemini helper ----------
-
 async function askGemini(promptText) {
   if (!GEMINI_API_KEY) return null;
   const models = [GEMINI_MODEL];
   if (GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== GEMINI_MODEL) models.push(GEMINI_FALLBACK_MODEL);
-
   for (const model of models) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
@@ -207,7 +193,6 @@ async function askGeminiChat(systemText, contents) {
   if (!GEMINI_API_KEY) return null;
   const models = [GEMINI_MODEL];
   if (GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== GEMINI_MODEL) models.push(GEMINI_FALLBACK_MODEL);
-
   for (const model of models) {
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
@@ -248,13 +233,10 @@ async function askGeminiChat(systemText, contents) {
 }
 
 // ---------- Inbox storage ----------
-
 const INBOX_FILE = "inbox-data.json";
 const conversations = new Map();
-
 // MongoDB na ho (ya connect na ho) to purani tarah file me save hota hai (deploy par ud jata hai)
 let db = null;
-
 try {
   const saved = JSON.parse(fs.readFileSync(INBOX_FILE, "utf8"));
   for (const [k, v] of Object.entries(saved)) conversations.set(k, v);
@@ -269,7 +251,6 @@ async function initDb() {
   const client = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
   await client.connect();
   db = client.db(MONGODB_DB);
-
   const docs = await db.collection("conversations").find({}).toArray();
   conversations.clear();
   for (const d of docs) {
@@ -285,13 +266,11 @@ async function initDb() {
 }
 
 const saveTimers = new Map();
-
 function saveInboxFile() {
   try {
     fs.writeFileSync(INBOX_FILE, JSON.stringify(Object.fromEntries(conversations)));
   } catch (e) {}
 }
-
 async function persistConversation(phone) {
   clearTimeout(saveTimers.get(phone));
   saveTimers.delete(phone);
@@ -311,7 +290,6 @@ async function persistConversation(phone) {
     console.error("MongoDB save error:", err.message);
   }
 }
-
 function queueSave(phone) {
   clearTimeout(saveTimers.get(phone));
   saveTimers.set(
@@ -414,7 +392,6 @@ function fmtTime(t) {
 }
 
 // ---------- AI Support helpers ----------
-
 // true = reply do, "notify" = limit abhi lagi (customer ko ek baar batao), false = chup raho
 function aiAllowed(phone) {
   const now = Date.now();
@@ -463,7 +440,6 @@ function markNeedsHuman(phone, value) {
 }
 
 // ---------- Shopify se live jaankari (AI ke liye) ----------
-
 let productsCache = { time: 0, text: "" };
 async function getProductsText() {
   if (Date.now() - productsCache.time < 10 * 60 * 1000) return productsCache.text;
@@ -475,14 +451,17 @@ async function getProductsText() {
     let data = await shopifyGraphQL(mk(true));
     if (data?.errors || !data?.data?.products) data = await shopifyGraphQL(mk(false));
     const nodes = data?.data?.products?.nodes || [];
-    const money = (m) => (m?.currencyCode === "INR" ? "Rs " : (m?.currencyCode || "") + " ") + Math.round(Number(m?.amount || 0));
+    const money = (m) =>
+      (m?.currencyCode === "INR" ? "Rs " : (m?.currencyCode || "") + " ") + Math.round(Number(m?.amount || 0));
     const text = nodes
       .map((p) => {
         const lo = p.priceRangeV2?.minVariantPrice;
         const hi = p.priceRangeV2?.maxVariantPrice;
         const price = lo && hi && lo.amount !== hi.amount ? `${money(lo)} - ${money(hi)}` : money(lo);
         const out = p.tracksInventory && typeof p.totalInventory === "number" && p.totalInventory <= 0;
-        return `- ${cleanText(p.title, 80)} | ${price}${out ? " | OUT OF STOCK" : ""}${p.onlineStoreUrl ? " | " + p.onlineStoreUrl : ""}`;
+        return `- ${cleanText(p.title, 80)} | ${price}${out ? " | OUT OF STOCK" : ""}${
+          p.onlineStoreUrl ? " | " + p.onlineStoreUrl : ""
+        }`;
       })
       .join("\n")
       .slice(0, 8000);
@@ -540,7 +519,11 @@ async function getCustomerOrdersText(phone) {
             return `${f.displayStatus || "shipped"}${tr ? " (" + tr + ")" : ""}`;
           })
           .join(" | ");
-        return `- Order ${o.name} | placed ${fmtTime(new Date(o.createdAt).getTime())} | items: ${items} | total: ${t ? (t.currencyCode === "INR" ? "Rs " : t.currencyCode + " ") + t.amount : "-"} | payment: ${o.displayFinancialStatus} | status: ${o.cancelledAt ? "CANCELLED" : o.displayFulfillmentStatus}${ships ? " | shipment: " + ships : ""}`;
+        return `- Order ${o.name} | placed ${fmtTime(new Date(o.createdAt).getTime())} | items: ${items} | total: ${
+          t ? (t.currencyCode === "INR" ? "Rs " : t.currencyCode + " ") + t.amount : "-"
+        } | payment: ${o.displayFinancialStatus} | status: ${
+          o.cancelledAt ? "CANCELLED" : o.displayFulfillmentStatus
+        }${ships ? " | shipment: " + ships : ""}`;
       })
       .join("\n");
   } catch (err) {
@@ -561,14 +544,9 @@ async function handleAiReply(msg) {
     }
     return;
   }
-
   const contents = buildHistory(phone);
   if (!contents.length) return;
-
-  const [productsText, ordersText] = await Promise.all([
-    getProductsText(),
-    getCustomerOrdersText(phone),
-  ]);
+  const [productsText, ordersText] = await Promise.all([getProductsText(), getCustomerOrdersText(phone)]);
   const aiReply = await askGeminiChat(buildSystemPrompt(productsText, ordersText), contents);
   if (!aiReply) {
     markNeedsHuman(phone, true);
@@ -576,7 +554,6 @@ async function handleAiReply(msg) {
     addMessage(phone, "out", HUMAN_HANDOFF_TEXT);
     return;
   }
-
   const reply = aiReply.trim();
   if (reply.toUpperCase().startsWith("HUMAN")) {
     markNeedsHuman(phone, true);
@@ -584,13 +561,11 @@ async function handleAiReply(msg) {
     addMessage(phone, "out", HUMAN_HANDOFF_TEXT);
     return;
   }
-
   await sendText(phone, reply);
   addMessage(phone, "out", reply);
 }
 
 // ---------- Helpers ----------
-
 function cleanPhone(raw) {
   if (!raw) return null;
   const digits = String(raw).replace(/\D/g, "");
@@ -620,8 +595,66 @@ function formatTotal(order) {
   return `${symbol}${order.total_price}`;
 }
 
-// ---------- COD pehchan + High-risk points (bina AI) ----------
+// ---------- Prepaid offer: product tag se discount ----------
+// Webhook payload me product tags nahi aate, isliye Shopify se alag se mangwate hain
+async function getProductTags(productIds) {
+  const ids = [...new Set((productIds || []).filter(Boolean).map(String))];
+  if (!ids.length) return {};
+  const q = `query($ids: [ID!]!) {
+    nodes(ids: $ids) { ... on Product { legacyResourceId tags } }
+  }`;
+  const data = await shopifyGraphQL(q, {
+    ids: ids.map((id) => `gid://shopify/Product/${id}`),
+  });
+  const map = {};
+  for (const n of data?.data?.nodes || []) {
+    if (n?.legacyResourceId) map[String(n.legacyResourceId)] = n.tags || [];
+  }
+  return map;
+}
 
+// Tag se discount nikalta hai: discount-50 (flat Rs 50) ya discount-10% (10 percent)
+function parseDiscountTag(tags) {
+  for (const t of tags || []) {
+    const m = /^discount-(\d+(?:\.\d+)?)(%?)$/i.exec(String(t).trim());
+    if (m) return { value: Number(m[1]), percent: m[2] === "%" };
+  }
+  return null;
+}
+
+// Order ka total discount + final amount. Tag nahi to default PREPAID_OFFER_PERCENT
+async function calcPrepaidOffer(order, total) {
+  const items = order.line_items || [];
+  let tagMap = {};
+  try {
+    tagMap = await getProductTags(items.map((i) => i.product_id));
+  } catch (err) {
+    console.error("product tags error:", err.response?.data || err.message);
+  }
+  let discount = 0;
+  const percents = new Set();
+  let allPercent = true;
+  for (const i of items) {
+    const qty = Number(i.quantity) || 1;
+    const lineTotal = (Number(i.price) || 0) * qty;
+    const d = parseDiscountTag(tagMap[String(i.product_id)]);
+    if (d && !d.percent) {
+      discount += Math.min(d.value * qty, lineTotal); // flat: har piece par
+      allPercent = false;
+    } else {
+      const pct = d ? d.value : PREPAID_OFFER_PERCENT;
+      discount += (lineTotal * pct) / 100;
+      percents.add(pct);
+    }
+  }
+  discount = Math.round(discount);
+  const finalAmount = Math.max(0, Math.round(total - discount));
+  // {{3}}: sab items par ek hi percent ho to "10%", warna total rupay "Rs 150"
+  const label = allPercent && percents.size === 1 ? `${[...percents][0]}%` : `Rs ${discount}`;
+  return { discount, finalAmount, label };
+}
+
+// ---------- COD pehchan + High-risk points (bina AI) ----------
 function isCodOrder(order) {
   const gateways = order.payment_gateway_names || [];
   if (gateways.some((g) => /\bcod\b|cash on delivery/i.test(String(g)))) return true;
@@ -667,37 +700,34 @@ async function assessRisk(order, phone, { problems, cod, total, rtoPin }) {
     score += pts;
     reasons.push(`${why} +${pts}`);
   };
-
   if (problems.length) add(RISK_POINTS.addressProblem, "address problem");
-  if (cod && total > COD_LIMIT) add(RISK_POINTS.codHigh, `COD ${total} > ${COD_LIMIT}`);
+  if (cod && total > COD_LIMIT) add(RISK_POINTS.codHigh, `COD ${total} >${COD_LIMIT}`);
   if (rtoPin) add(RISK_POINTS.rtoPincode, "RTO pincode");
-
   let trusted = false;
   try {
     const prior = await getPhoneHistory(phone, order.id);
     if (prior.some((o) => o.tags.includes("wa-trusted"))) trusted = true;
-
     const last24h = prior.filter((o) => Date.now() - o.createdAt < 86400000).length;
     if (last24h + 1 >= 3) add(RISK_POINTS.manyOrders, `24 ghante me ${last24h + 1} orders`);
-
     if (prior.some((o) => o.cancelled || o.tags.includes("wa-cancelled")))
       add(RISK_POINTS.prevCancelled, "pehle order cancel hua");
     if (prior.some((o) => o.tags.includes("rto"))) add(RISK_POINTS.prevRto, "pehle parcel wapas aaya");
   } catch (err) {
     console.error("risk history error:", err.response?.data || err.message);
   }
-
   return { score, reasons, trusted };
 }
 
 // ---------- Address verify (bina AI: pincode + fuzzy match) ----------
-
 // Hinglish spelling ka farak hatane ke liye (Muhalla/Mohalla, Jaipur/Jeypur)
 function normText(s = "") {
   return String(s)
     .toLowerCase()
     .replace(/[^a-z0-9\u0900-\u097f ]/g, " ")
-    .replace(/\b(dist|distt|district|zila|jila|tehsil|tahsil|teh|post|po|village|vill|gram|gaon|gav|ps|thana)\b/g, " ")
+    .replace(
+      /\b(dist|distt|district|zila|jila|tehsil|tahsil|teh|post|po|village|vill|gram|gaon|gav|ps|thana)\b/g,
+      " "
+    )
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -720,7 +750,8 @@ function phon(s = "") {
 }
 
 function lev(a, b) {
-  const m = a.length, n = b.length;
+  const m = a.length,
+    n = b.length;
   if (!m) return n;
   if (!n) return m;
   const d = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
@@ -736,7 +767,8 @@ function lev(a, b) {
 }
 
 function sim(a, b) {
-  const x = phon(a), y = phon(b);
+  const x = phon(a),
+    y = phon(b);
   if (!x || !y) return 0;
   if (x === y) return 1;
   if (Math.min(x.length, y.length) >= 4 && (x.includes(y) || y.includes(x))) return 0.9;
@@ -745,7 +777,8 @@ function sim(a, b) {
 
 // Kya ye naam (district / village / post office) address ke text me kahin bhi likha hai?
 function foundInText(needle, text) {
-  const n = phon(needle), t = phon(text);
+  const n = phon(needle),
+    t = phon(text);
   if (!n || !t || n.length < 3) return false;
   if (t.includes(n)) return true;
   const words = t.split(" ");
@@ -758,7 +791,6 @@ function foundInText(needle, text) {
 }
 
 const pinCache = new Map();
-
 // India Post ki free pincode API: pincode asli hai ya nahi, aur kis state/district/area ka hai
 // found:true/false deta hai; API na chale to null (tab tag nahi lagta)
 async function lookupPincode(pin) {
@@ -794,43 +826,37 @@ function normState(s) {
     .replace(/[^a-z]/g, "");
 }
 
-// Returns { problems: [..], pinInfo, unknown }
+// Returns { problems: [..], warnings: [..], pinInfo, unknown }
 // unknown = true => pincode API chali nahi, isliye verify nahi ho paya (koi tag nahi lagega)
 async function checkAddress(addr) {
   const problems = [];
+  const warnings = [];
   let pinInfo = null;
-
   if (!addr) {
     problems.push("shipping address nahi hai");
-    return { problems, pinInfo, unknown: false };
+    return { problems, warnings, pinInfo, unknown: false };
   }
-
   // 1. Country
   const country = String(addr.country_code || addr.country || "").trim();
   if (country && !/^(in|india|bharat)$/i.test(country)) problems.push("country India nahi hai");
-
   // 2. Address line: ghar number zaroori nahi, par kuch locality/mohalla/landmark text hona chahiye
   const line = cleanText([addr.address1, addr.address2].filter(Boolean).join(" "));
   if (line.length < 4) problems.push("address line bahut chhoti/khali");
   else if (!/[a-z\u0900-\u097f]{3,}/i.test(line)) problems.push("address me mohalla/gaon/landmark nahi, sirf number hai");
-
   // 3. City
   if (!cleanText(addr.city)) problems.push("city nahi hai");
-
   // 4. Pincode
   const pin = String(addr.zip || "").replace(/\s/g, "");
   if (!/^[1-9]\d{5}$/.test(pin)) {
     problems.push("pincode ka format galat");
-    return { problems, pinInfo, unknown: false };
+    return { problems, warnings, pinInfo, unknown: false };
   }
-
   pinInfo = await lookupPincode(pin);
-  if (!pinInfo) return { problems, pinInfo, unknown: true };
+  if (!pinInfo) return { problems, warnings, pinInfo, unknown: true };
   if (pinInfo.found === false) {
     problems.push("pincode exist nahi karta");
-    return { problems, pinInfo, unknown: false };
+    return { problems, warnings, pinInfo, unknown: false };
   }
-
   // 5. State (pincode ke state se match)
   if (addr.province) {
     const a = normState(addr.province);
@@ -839,43 +865,37 @@ async function checkAddress(addr) {
     if (!stateOk) problems.push(`pincode ${pin} ${pinInfo.state} ka hai, address me ${addr.province} likha hai`);
   } else {
     problems.push("state nahi hai");
-  }
-
+          }
   // 6. City: sirf halka warning (address galat nahi maante, customer se galti ho sakti hai)
   //    city pincode ke district ya kisi post office ke naam se na mile to warning
-  const warnings = [];
   const cityTxt = cleanText(addr.city);
   if (cityTxt) {
     const candidates = [...(pinInfo.districts || []), ...(pinInfo.names || [])];
     const cityOk = candidates.some((n) => sim(n, cityTxt) >= 0.75 || foundInText(n, cityTxt));
     if (!cityOk) {
       warnings.push(
-        `city "${cityTxt}" pincode se match nahi (district: ${pinInfo.district}, area: ${(pinInfo.names || []).slice(0, 4).join(", ")})`
+        `city "${cityTxt}" pincode se match nahi (district: ${pinInfo.district}, area: ${(pinInfo.names || [])
+          .slice(0, 4)
+          .join(", ")})`
       );
     }
   }
-
   return { problems, warnings, pinInfo, unknown: false };
 }
 
+// ---------- Shopify token + API ----------
 let cachedToken = null;
 let tokenExpiresAt = 0;
-
 async function getShopifyToken() {
   const clientSecret = (SHOPIFY_CLIENT_SECRET || "").trim();
   if (!clientSecret) return SHOPIFY_ACCESS_TOKEN;
-
   if (cachedToken && Date.now() < tokenExpiresAt - 60000) return cachedToken;
-
   const body = new URLSearchParams({
     grant_type: "client_credentials",
     client_id: (SHOPIFY_API_KEY || "").trim(),
     client_secret: clientSecret,
   });
-  const res = await axios.post(
-    `https://${SHOPIFY_STORE}/admin/oauth/access_token`,
-    body
-  );
+  const res = await axios.post(`https://${SHOPIFY_STORE}/admin/oauth/access_token`, body);
   cachedToken = res.data.access_token;
   tokenExpiresAt = Date.now() + (res.data.expires_in || 86400) * 1000;
   console.log("Naya Shopify token mil gaya");
@@ -940,7 +960,6 @@ async function sendText(to, text) {
 }
 
 // ---------- Payment received message (bina button) ----------
-
 function verifyShopifyHmac(req) {
   const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
   const secret = (SHOPIFY_API_SECRET || "").trim();
@@ -1002,195 +1021,176 @@ async function notifyPaid(order, phone) {
   }
 }
 
-app.post(
-  "/webhooks/orders-paid",
-  express.raw({ type: "application/json" }),
-  async (req, res) => {
-    if (!verifyShopifyHmac(req)) {
-      console.warn("orders-paid: Invalid Shopify HMAC");
-      return res.status(401).send("Unauthorized");
-    }
-    res.status(200).send("OK");
-    try {
-      const order = JSON.parse(req.body.toString("utf8"));
-      console.log(`orders-paid webhook aaya: ${order.name} (status ${order.financial_status})`);
-      const phone = cleanPhone(
-        order.shipping_address?.phone ||
-          order.phone ||
-          order.customer?.phone ||
-          order.billing_address?.phone
-      );
-      if (!phone) {
-        await addTags(order.id, ["wa-paid", "wa-no-phone"]);
-        return;
-      }
-      await notifyPaid(order, phone);
-    } catch (err) {
-      console.error("orders-paid error:", err.response?.data || err.message);
-    }
+app.post("/webhooks/orders-paid", express.raw({ type: "application/json" }), async (req, res) => {
+  if (!verifyShopifyHmac(req)) {
+    console.warn("orders-paid: Invalid Shopify HMAC");
+    return res.status(401).send("Unauthorized");
   }
-);
+  res.status(200).send("OK");
+  try {
+    const order = JSON.parse(req.body.toString("utf8"));
+    console.log(`orders-paid webhook aaya: ${order.name} (status ${order.financial_status})`);
+    const phone = cleanPhone(
+      order.shipping_address?.phone ||
+        order.phone ||
+        order.customer?.phone ||
+        order.billing_address?.phone
+    );
+    if (!phone) {
+      await addTags(order.id, ["wa-paid", "wa-no-phone"]);
+      return;
+    }
+    await notifyPaid(order, phone);
+  } catch (err) {
+    console.error("orders-paid error:", err.response?.data || err.message);
+  }
+});
 
 // ---------- Shopify webhook: orders/create ----------
+app.post("/webhooks/orders-create", express.raw({ type: "application/json" }), async (req, res) => {
+  const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
+  const secret = (SHOPIFY_API_SECRET || "").trim();
+  const digest = crypto.createHmac("sha256", secret).update(req.body).digest("base64");
+  const a = Buffer.from(digest);
+  const b = Buffer.from(hmacHeader);
+  const valid = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!valid) {
+    console.warn(
+      `Invalid Shopify HMAC | secret length: ${secret.length} | header present: ${hmacHeader.length > 0}`
+    );
+    return res.status(401).send("Unauthorized");
+  }
+  res.status(200).send("OK");
 
-app.post(
-  "/webhooks/orders-create",
-  express.raw({ type: "application/json" }),
-  async (req, res) => {
-    const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
-    const secret = (SHOPIFY_API_SECRET || "").trim();
-    const digest = crypto
-      .createHmac("sha256", secret)
-      .update(req.body)
-      .digest("base64");
+  try {
+    const order = JSON.parse(req.body.toString("utf8"));
+    if (!(await claimOrder(order.id))) return;
 
-    const a = Buffer.from(digest);
-    const b = Buffer.from(hmacHeader);
-    const valid = a.length === b.length && crypto.timingSafeEqual(a, b);
-
-    if (!valid) {
-      console.warn(
-        `Invalid Shopify HMAC | secret length: ${secret.length} | header present: ${hmacHeader.length > 0}`
-      );
-      return res.status(401).send("Unauthorized");
+    const phone = cleanPhone(
+      order.shipping_address?.phone ||
+        order.phone ||
+        order.customer?.phone ||
+        order.billing_address?.phone
+    );
+    if (!phone) {
+      console.warn(`Order ${order.name}: valid phone nahi mila`);
+      await addTags(order.id, ["wa-no-phone"]);
+      return;
     }
 
-    res.status(200).send("OK");
-
-    try {
-      const order = JSON.parse(req.body.toString("utf8"));
-      if (!(await claimOrder(order.id))) return;
-
-      const phone = cleanPhone(
-        order.shipping_address?.phone ||
-          order.phone ||
-          order.customer?.phone ||
-          order.billing_address?.phone
-      );
-      if (!phone) {
-        console.warn(`Order ${order.name}: valid phone nahi mila`);
-        await addTags(order.id, ["wa-no-phone"]);
-        return;
-      }
-
-      // ---- Block list: pehle se block kiye number ka order, koi message nahi ----
-      let blocked = BLOCKED_PHONES.has(phone);
-      if (!blocked) {
-        try {
-          const hist = await getPhoneHistory(phone, order.id, 365);
-          blocked = hist.some((o) => o.tags.includes("wa-block"));
-        } catch (err) {
-          console.error("block check error:", err.response?.data || err.message);
-        }
-      }
-      if (blocked) {
-        console.warn(`Order ${order.name}: BLOCKED number ${phone} (action: ${BLOCK_ACTION})`);
-        await addTags(order.id, ["wa-blocked"]);
-        if (BLOCK_ACTION === "cancel") {
-          const r = await cancelShopifyOrder(order.id, "Blocked number: auto-cancel");
-          if (!r.ok) console.error(`Order ${order.name}: block cancel fail`, JSON.stringify(r.errs));
-          else await addTags(order.id, ["wa-auto-cancelled"]);
-        }
-        return;
-      }
-
-      const customerName = cleanText(
-        order.shipping_address?.first_name || order.customer?.first_name || "Customer",
-        60
-      );
-
-      const items = cleanText(
-        (order.line_items || [])
-          .map((i) => {
-            const v =
-              i.variant_title && i.variant_title !== "Default Title"
-                ? ` - ${i.variant_title}`
-                : "";
-            return `${i.quantity}x ${i.title}${v}`;
-          })
-          .join(", "),
-        300
-      );
-
-      const address = formatAddress(order.shipping_address);
-
-      // ---- Pehle address aur risk dekhte hain (bina AI), taaki sahi message jaye ----
-      let addrResult = null;
+    // ---- Block list: pehle se block kiye number ka order, koi message nahi ----
+    let blocked = BLOCKED_PHONES.has(phone);
+    if (!blocked) {
       try {
-        addrResult = await checkAddress(order.shipping_address);
+        const hist = await getPhoneHistory(phone, order.id, 365);
+        blocked = hist.some((o) => o.tags.includes("wa-block"));
       } catch (err) {
-        console.error("address check error:", err.response?.data || err.message);
+        console.error("block check error:", err.response?.data || err.message);
       }
-      const problems = addrResult?.problems || [];
-      const warnings = addrResult?.warnings || [];
-      const addrUnknown = !addrResult || addrResult.unknown;
-
-      const pin = String(order.shipping_address?.zip || "").replace(/\s/g, "");
-      const rtoPin = RTO_PINCODES.has(pin);
-      const cod = isCodOrder(order);
-      const total = Number(order.total_price) || 0;
-
-      // COD freeze: COD order, aur (address me problem + amount limit se zyada) ya (pincode RTO list me)
-      const freezeCod = cod && ((problems.length > 0 && total > COD_LIMIT) || rtoPin);
-
-      let sentMessage = false;
-      let codFrozen = false;
-
-      // Checkout par hi online paid: sirf "payment received" (bina button), Confirm/Cancel wala message nahi
-      const prepaid = order.financial_status === "paid";
-      if (prepaid) {
-        sentMessage = await notifyPaid(order, phone);
+    }
+    if (blocked) {
+      console.warn(`Order ${order.name}: BLOCKED number ${phone} (action: ${BLOCK_ACTION})`);
+      await addTags(order.id, ["wa-blocked"]);
+      if (BLOCK_ACTION === "cancel") {
+        const r = await cancelShopifyOrder(order.id, "Blocked number: auto-cancel");
+        if (!r.ok) console.error(`Order ${order.name}: block cancel fail`, JSON.stringify(r.errs));
+        else await addTags(order.id, ["wa-auto-cancelled"]);
       }
+      return;
+    }
 
-      if (freezeCod) {
-        if (!UPI_ID) {
-          console.warn(`Order ${order.name}: COD freeze banta tha par UPI_ID set nahi hai, normal message ja raha hai`);
-        } else {
-          try {
-            const frozenRes = await sendWhatsApp({
-              to: phone,
-              type: "template",
-              template: {
-                name: COD_TEMPLATE,
-                language: { code: COD_TEMPLATE_LANG },
-                components: [
-                  {
-                    type: "body",
-                    parameters: [
-                      { type: "text", text: customerName },
-                      { type: "text", text: String(order.name) },
-                      { type: "text", text: formatTotal(order) },
-                      { type: "text", text: UPI_ID },
-                    ],
-                  },
-                ],
-              },
-            });
-            console.log("COD freeze Meta response:", JSON.stringify(frozenRes.data));
-            codFrozen = true;
-            sentMessage = true;
-            const freezeWhy = rtoPin ? `pincode ${pin} RTO list me` : problems.join(" | ");
-            console.log(`Order ${order.name}: COD freeze message bheja -> ${phone} (${freezeWhy})`);
-            await addTags(order.id, ["wa-cod-frozen"]);
-            addMessage(
-              phone,
-              "out",
-              `[COD band message] Order ${order.name}, amount ${formatTotal(order)}, UPI ${UPI_ID}`
-            );
-          } catch (err) {
-            console.error(
-              "COD freeze message nahi gaya (template approve hua?), normal message bhej rahe hain:",
-              JSON.stringify(err.response?.data || err.message)
-            );
-            await addTags(order.id, ["wa-cod-freeze-failed"]);
-          }
+    const customerName = cleanText(
+      order.shipping_address?.first_name || order.customer?.first_name || "Customer",
+      60
+    );
+    const items = cleanText(
+      (order.line_items || [])
+        .map((i) => {
+          const v = i.variant_title && i.variant_title !== "Default Title" ? ` - ${i.variant_title}` : "";
+          return `${i.quantity}x ${i.title}${v}`;
+        })
+        .join(", "),
+      300
+    );
+    const address = formatAddress(order.shipping_address);
+
+    // ---- Pehle address aur risk dekhte hain (bina AI), taaki sahi message jaye ----
+    let addrResult = null;
+    try {
+      addrResult = await checkAddress(order.shipping_address);
+    } catch (err) {
+      console.error("address check error:", err.response?.data || err.message);
+    }
+    const problems = addrResult?.problems || [];
+    const warnings = addrResult?.warnings || [];
+    const addrUnknown = !addrResult || addrResult.unknown;
+    const pin = String(order.shipping_address?.zip || "").replace(/\s/g, "");
+    const rtoPin = RTO_PINCODES.has(pin);
+    const cod = isCodOrder(order);
+    const total = Number(order.total_price) || 0;
+
+    // COD freeze: COD order, aur (address me problem + amount limit se zyada) ya (pincode RTO list me)
+    const freezeCod = cod && ((problems.length > 0 && total > COD_LIMIT) || rtoPin);
+
+    let sentMessage = false;
+    let codFrozen = false;
+
+    // Checkout par hi online paid: sirf "payment received" (bina button), Confirm/Cancel wala message nahi
+    const prepaid = order.financial_status === "paid";
+    if (prepaid) {
+      sentMessage = await notifyPaid(order, phone);
+    }
+
+    if (freezeCod) {
+      if (!UPI_ID) {
+        console.warn(
+          `Order ${order.name}: COD freeze banta tha par UPI_ID set nahi hai, normal message ja raha hai`
+        );
+      } else {
+        try {
+          const frozenRes = await sendWhatsApp({
+            to: phone,
+            type: "template",
+            template: {
+              name: COD_TEMPLATE,
+              language: { code: COD_TEMPLATE_LANG },
+              components: [
+                {
+                  type: "body",
+                  parameters: [
+                    { type: "text", text: customerName },
+                    { type: "text", text: String(order.name) },
+                    { type: "text", text: formatTotal(order) },
+                    { type: "text", text: UPI_ID },
+                  ],
+                },
+              ],
+            },
+          });
+          console.log("COD freeze Meta response:", JSON.stringify(frozenRes.data));
+          codFrozen = true;
+          sentMessage = true;
+          const freezeWhy = rtoPin ? `pincode ${pin} RTO list me` : problems.join(" | ");
+          console.log(`Order ${order.name}: COD freeze message bheja -> ${phone} (${freezeWhy})`);
+          await addTags(order.id, ["wa-cod-frozen"]);
+          addMessage(
+            phone,
+            "out",
+            `[COD band message] Order ${order.name}, amount ${formatTotal(order)}, UPI ${UPI_ID}`
+          );
+        } catch (err) {
+          console.error(
+            "COD freeze message nahi gaya (template approve hua?), normal message bhej rahe hain:",
+            JSON.stringify(err.response?.data || err.message)
+          );
+          await addTags(order.id, ["wa-cod-freeze-failed"]);
         }
       }
+    }
 
-      if (!codFrozen && !prepaid) {
-        const imageUrl = await getProductImage(order.line_items?.[0]?.product_id);
-
-        const components = [
+    if (!codFrozen && !prepaid) {
+      const imageUrl = await getProductImage(order.line_items?.[0]?.product_id);
+      const components = [
         {
           type: "body",
           parameters: [
@@ -1214,68 +1214,73 @@ app.post(
           parameters: [{ type: "payload", payload: `CANCEL_${order.id}` }],
         },
       ];
-
       if (imageUrl) {
         components.unshift({
           type: "header",
           parameters: [{ type: "image", image: { link: imageUrl } }],
         });
       }
-
-        try {
-          const waRes = await sendWhatsApp({
-            to: phone,
-            type: "template",
-            template: {
-              name: TEMPLATE_NAME,
-              language: { code: TEMPLATE_LANG },
-              components,
-            },
-          });
-          console.log("Meta response:", JSON.stringify(waRes.data));
-          sentMessage = true;
-          await addTags(order.id, ["wa-pending"]);
-          console.log(`Order ${order.name}: WhatsApp bhej diya -> ${phone}`);
-        } catch (err) {
-          console.error(`Order ${order.name}: WhatsApp nahi gaya:`, JSON.stringify(err.response?.data || err.message));
-          await addTags(order.id, ["wa-msg-failed"]);
-        }
-      }
-
-      // ---- Address ke tag (sirf aapke liye, customer ko kuch nahi jata) ----
-      //   sahi  -> wa-address-ok   (city galat lage to saath me wa-city-check)
-      //   galat -> wa-check-address
       try {
-        if (problems.length) {
-          console.log(`Order ${order.name}: address check: ${problems.join(" | ")}`);
-          await addTags(order.id, ["wa-check-address"]);
-        } else if (addrUnknown) {
-          console.warn(`Order ${order.name}: pincode API chali nahi, address verify nahi hua`);
-        } else {
-          console.log(`Order ${order.name}: address OK`);
-          await addTags(order.id, ["wa-address-ok"]);
-          if (warnings.length) {
-            console.log(`Order ${order.name}: city warning: ${warnings.join(" | ")}`);
-            await addTags(order.id, ["wa-city-check"]);
-          }
-        }
+        const waRes = await sendWhatsApp({
+          to: phone,
+          type: "template",
+          template: {
+            name: TEMPLATE_NAME,
+            language: { code: TEMPLATE_LANG },
+            components,
+          },
+        });
+        console.log("Meta response:", JSON.stringify(waRes.data));
+        sentMessage = true;
+        await addTags(order.id, ["wa-pending"]);
+        console.log(`Order ${order.name}: WhatsApp bhej diya -> ${phone}`);
       } catch (err) {
-        console.error("address tag error:", err.response?.data || err.message);
-      }
-
-      // ---- High-risk flag (points se, bina AI) ----
-      try {
-        const risk = await assessRisk(order, phone, { problems, cod, total, rtoPin });
-        console.log(
-          `Order ${order.name}: risk score ${risk.score}${risk.reasons.length ? " (" + risk.reasons.join(", ") + ")" : ""}${risk.trusted ? " | trusted customer" : ""}`
+        console.error(
+          `Order ${order.name}: WhatsApp nahi gaya:`,
+          JSON.stringify(err.response?.data || err.message)
         );
-        if (!risk.trusted && risk.score >= HIGH_RISK_SCORE) {
-          await addTags(order.id, ["wa-high-risk"]);
+        await addTags(order.id, ["wa-msg-failed"]);
+      }
+    }
 
-          // High-risk COD customer ko prepaid offer (frozen COD ko pehle hi UPI message ja chuka hai)
-          if (PREPAID_OFFER_TEMPLATE && UPI_ID && cod && !codFrozen && PREPAID_OFFER_PERCENT > 0) {
-            try {
-              const newAmount = Math.round((total * (100 - PREPAID_OFFER_PERCENT)) / 100);
+    // ---- Address ke tag (sirf aapke liye, customer ko kuch nahi jata) ----
+    //   sahi  -> wa-address-ok   (city galat lage to saath me wa-city-check)
+    //   galat -> wa-check-address
+    try {
+      if (problems.length) {
+        console.log(`Order ${order.name}: address check: ${problems.join(" | ")}`);
+        await addTags(order.id, ["wa-check-address"]);
+      } else if (addrUnknown) {
+        console.warn(`Order ${order.name}: pincode API chali nahi, address verify nahi hua`);
+      } else {
+        console.log(`Order ${order.name}: address OK`);
+        await addTags(order.id, ["wa-address-ok"]);
+        if (warnings.length) {
+          console.log(`Order ${order.name}: city warning: ${warnings.join(" | ")}`);
+          await addTags(order.id, ["wa-city-check"]);
+        }
+      }
+    } catch (err) {
+      console.error("address tag error:", err.response?.data || err.message);
+    }
+
+    // ---- High-risk flag (points se, bina AI) ----
+    try {
+      const risk = await assessRisk(order, phone, { problems, cod, total, rtoPin });
+      console.log(
+        `Order ${order.name}: risk score ${risk.score}${
+          risk.reasons.length ? " (" + risk.reasons.join(", ") + ")" : ""
+        }${risk.trusted ? " | trusted customer" : ""}`
+      );
+      if (!risk.trusted && risk.score >= HIGH_RISK_SCORE) {
+        await addTags(order.id, ["wa-high-risk"]);
+
+        // High-risk COD customer ko prepaid offer (frozen COD ko pehle hi UPI message ja chuka hai)
+        // Discount: product tag discount-50 / discount-10% se, warna PREPAID_OFFER_PERCENT
+        if (PREPAID_OFFER_TEMPLATE && UPI_ID && cod && !codFrozen) {
+          try {
+            const offer = await calcPrepaidOffer(order, total);
+            if (offer.discount > 0) {
               await sendWhatsApp({
                 to: phone,
                 type: "template",
@@ -1286,32 +1291,38 @@ app.post(
                     {
                       type: "body",
                       parameters: [
-                        { type: "text", text: customerName },
-                        { type: "text", text: String(order.name) },
-                        { type: "text", text: String(PREPAID_OFFER_PERCENT) },
-                        { type: "text", text: String(newAmount) },
-                        { type: "text", text: UPI_ID },
+                        { type: "text", text: customerName }, // {{1}}
+                        { type: "text", text: String(order.name) }, // {{2}}
+                        { type: "text", text: offer.label }, // {{3}} jaise "10%" ya "Rs 150"
+                        { type: "text", text: String(offer.finalAmount) }, // {{4}}
+                        { type: "text", text: UPI_ID }, // {{5}}
                       ],
                     },
                   ],
                 },
               });
               await addTags(order.id, ["wa-prepaid-offered"]);
-              addMessage(phone, "out", `[Prepaid offer] Order ${order.name}: ${PREPAID_OFFER_PERCENT}% off, Rs ${newAmount}`);
-              console.log(`Order ${order.name}: prepaid offer bheja (${PREPAID_OFFER_PERCENT}% off, Rs ${newAmount})`);
-            } catch (err) {
-              console.error("prepaid offer error:", JSON.stringify(err.response?.data || err.message));
+              addMessage(
+                phone,
+                "out",
+                `[Prepaid offer] Order ${order.name}: ${offer.label} off, Rs ${offer.finalAmount}`
+              );
+              console.log(
+                `Order ${order.name}: prepaid offer bheja (${offer.label} off, Rs ${offer.finalAmount})`
+              );
             }
+          } catch (err) {
+            console.error("prepaid offer error:", JSON.stringify(err.response?.data || err.message));
           }
         }
-      } catch (err) {
-        console.error("risk check error:", err.response?.data || err.message);
       }
     } catch (err) {
-      console.error("orders-create error:", err.response?.data || err.message);
+      console.error("risk check error:", err.response?.data || err.message);
     }
+  } catch (err) {
+    console.error("orders-create error:", err.response?.data || err.message);
   }
-);
+});
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
@@ -1322,8 +1333,7 @@ async function ackMedia(phone) {
   const last = mediaAcked.get(phone) || 0;
   if (Date.now() - last < 3600 * 1000) return;
   mediaAcked.set(phone, Date.now());
-  const text =
-    "Aapka message humne dekh liya hai 🙏 Hamari team check karke jaldi aapko confirm karegi 😊";
+  const text = "Aapka message humne dekh liya hai 🙏 Hamari team check karke jaldi aapko confirm karegi 😊";
   await sendText(phone, text);
   addMessage(phone, "out", text);
 }
@@ -1342,7 +1352,6 @@ app.get("/webhook", (req, res) => {
 // ---------- Meta webhook: customer replies + delivery status ----------
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
-
   try {
     const entries = req.body?.entry || [];
     for (const entry of entries) {
@@ -1350,12 +1359,9 @@ app.post("/webhook", async (req, res) => {
         for (const st of change.value?.statuses || []) {
           console.log("STATUS:", st.status, JSON.stringify(st.errors || ""));
         }
-
         const messages = change.value?.messages || [];
         for (const msg of messages) {
-          const profileName = (change.value?.contacts || []).find(
-            (c) => c.wa_id === msg.from
-          )?.profile?.name;
+          const profileName = (change.value?.contacts || []).find((c) => c.wa_id === msg.from)?.profile?.name;
           const media = extractMedia(msg);
           addMessage(msg.from, "in", describeMessage(msg), profileName, media);
 
@@ -1391,7 +1397,7 @@ app.post("/webhook", async (req, res) => {
               await removeTags(orderId, ["wa-pending", "wa-confirmed"]);
               await sendText(
                 msg.from,
-                "Hello! 🙏 Aapka cancel request humne note kar liya hai, aur hamari team jaldi ise process kar degi 😊\n\nUmeed hai future mein hum aapki seva kar paayenge 🛍️✨\nBazoora chunne ke liye Thank you! ❤️"
+                "Hello! 🙏 Aapka cancel request humne note kar liya hai, aur hamari team jaldi ise process kar degi 😊\n\nUmeed hai future mein hum aapki seva kar paayenge 🛍✨\nBazoora chunne ke liye Thank you! ❤️"
               );
             }
             console.log(`Reply: ${action} order ${orderId}`);
@@ -1411,7 +1417,6 @@ app.post("/webhook", async (req, res) => {
 });
 
 // ---------- Inbox page ----------
-
 function inboxAuth(req, res) {
   const key = req.query.key || req.body?.key;
   if (!INBOX_SECRET || key !== INBOX_SECRET) {
@@ -1485,7 +1490,6 @@ app.get("/inbox/media", async (req, res) => {
   if (!key) return;
   const id = String(req.query.id || "");
   if (!/^\d{5,30}$/.test(id)) return res.status(400).send("Bad id");
-
   try {
     const auth = { Authorization: `Bearer ${WHATSAPP_TOKEN}` };
     const meta = await axios.get(`https://graph.facebook.com/${GRAPH_VERSION}/${id}`, {
@@ -1494,7 +1498,6 @@ app.get("/inbox/media", async (req, res) => {
     });
     const fileUrl = meta.data?.url;
     if (!fileUrl) return res.status(404).send("File nahi mili");
-
     const file = await axios.get(fileUrl, {
       headers: auth,
       responseType: "arraybuffer",
@@ -1507,7 +1510,6 @@ app.get("/inbox/media", async (req, res) => {
       .trim()
       .toLowerCase();
     const inline = INLINE_MIMES.has(mime);
-
     res.set({
       "Content-Type": inline ? mime : "application/octet-stream",
       "Content-Disposition": inline ? "inline" : "attachment",
@@ -1516,7 +1518,6 @@ app.get("/inbox/media", async (req, res) => {
       "Cache-Control": "private, max-age=86400",
       "Accept-Ranges": "bytes",
     });
-
     // Video/audio ke liye Range support (seek aur Safari ke liye)
     const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || "");
     if (range && (range[1] || range[2])) {
@@ -1571,10 +1572,12 @@ app.get("/inbox", async (req, res) => {
 ${onlyWaiting ? '<input type="hidden" name="f" value="pending">' : ""}
 <input type="text" name="q" value="${esc(req.query.q || "")}" placeholder="Naam, number ya message dhundo">
 <button type="submit">Dhundo</button></form>
-<div class="tabs"><a class="${onlyWaiting ? "" : "on"}" href="/inbox?key=${k}">Sab (${all.length})</a><a class="${onlyWaiting ? "on" : ""}" href="/inbox?key=${k}&f=pending">Jawab baaki (${waitingCount})</a></div><br>`;
+<div class="tabs"><a class="${onlyWaiting ? "" : "on"}" href="/inbox?key=${k}">Sab (${all.length})</a><a class="${
+      onlyWaiting ? "on" : ""
+    }" href="/inbox?key=${k}&f=pending">Jawab baaki (${waitingCount})</a></div><br>`;
     const items = list.length
       ? list
-          .map(
+      .map(
             (x) => `<a class="card" href="/inbox?key=${k}&c=${encodeURIComponent(x.p)}">
 ${x.c.needsHuman ? "🔴 " : ""}<b>${esc(x.c.name || "Customer")}</b> (+${esc(x.p)})
 <small>${x.last.dir === "in" ? "" : "Aap: "}${esc(x.last.text.slice(0, 60))}</small>
@@ -1583,10 +1586,7 @@ ${x.c.needsHuman ? "🔴 " : ""}<b>${esc(x.c.name || "Customer")}</b> (+${esc(x.
           .join("")
       : `<div class="card">Koi chat nahi mili.</div>`;
     return res.send(
-      page(
-        "Bazoora Inbox",
-        `<div class="top">Bazoora Inbox</div><div class="wrap">${bar}${items}</div>`
-      )
+      page("Bazoora Inbox", `<div class="top">Bazoora Inbox</div><div class="wrap">${bar}${items}</div>`)
     );
   }
 
@@ -1595,13 +1595,14 @@ ${x.c.needsHuman ? "🔴 " : ""}<b>${esc(x.c.name || "Customer")}</b> (+${esc(x.
     return res
       .status(404)
       .send(page("Inbox", `<div class="wrap">Chat nahi mili. <a href="/inbox?key=${k}">Wapas</a></div>`));
-
   const lastIn = [...c.messages].reverse().find((m) => m.dir === "in");
   const within24 = lastIn && Date.now() - lastIn.time < 24 * 3600 * 1000;
   const bubbles = c.messages
     .map(
       (m) =>
-        `<div class="msg ${m.dir}">${mediaHtml(m.media, k)}${esc(m.media ? m.media.caption || "" : m.text)}<small>${fmtTime(m.time)}</small></div>`
+        `<div class="msg ${m.dir}">${mediaHtml(m.media, k)}${esc(
+          m.media ? m.media.caption || "" : m.text
+        )}<small>${fmtTime(m.time)}</small></div>`
     )
     .join("");
   let ordersText = "";
@@ -1615,11 +1616,12 @@ ${x.c.needsHuman ? "🔴 " : ""}<b>${esc(x.c.name || "Customer")}</b> (+${esc(x.
   const warn = within24
     ? ""
     : `<div class="warn">Customer ke aakhri message ko 24 ghante se zyada ho gaye. Reply shayad na jaye.</div>`;
-
   res.send(
     page(
       "Chat",
-      `<div class="top"><a href="/inbox?key=${k}">&larr; Inbox</a> &nbsp; ${esc(c.name || "Customer")} (+${esc(phone)})</div>
+      `<div class="top"><a href="/inbox?key=${k}">&larr; Inbox</a> &nbsp; ${esc(c.name || "Customer")} (+${esc(
+        phone
+      )})</div>
 <div class="wrap">${ordersBox}${bubbles}${err}${warn}
 <form method="POST" action="/inbox/reply">
 <input type="hidden" name="key" value="${esc(key)}">
@@ -1638,7 +1640,6 @@ app.post("/inbox/reply", async (req, res) => {
   const phone = String(req.body.phone || "");
   const text = String(req.body.text || "").trim();
   if (!phone || !text) return res.redirect(303, `/inbox?key=${k}`);
-
   try {
     await sendWhatsApp({ to: phone, type: "text", text: { body: text } });
     addMessage(phone, "out", text);
@@ -1648,22 +1649,17 @@ app.post("/inbox/reply", async (req, res) => {
     const e = err.response?.data?.error;
     const msg = e ? `${e.code}: ${e.message}` : err.message;
     console.error("inbox reply error:", msg);
-    res.redirect(
-      303,
-      `/inbox?key=${k}&c=${encodeURIComponent(phone)}&err=${encodeURIComponent(msg)}`
-    );
+    res.redirect(303, `/inbox?key=${k}&c=${encodeURIComponent(phone)}&err=${encodeURIComponent(msg)}`);
   }
 });
 
 // ---------- Delivery reminder (roz cron-job.org se chalega) ----------
-
 async function runReminders() {
   if (reminderRunning) {
     console.log("Reminder check pehle se chal raha hai, ye skip");
     return;
   }
   reminderRunning = true;
-
   try {
     const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
     const search = `fulfillment_status:fulfilled -tag:wa-reminded -tag:wa-cancelled created_at:>=${since}`;
@@ -1679,7 +1675,6 @@ async function runReminders() {
         }
       }
     }`;
-
     const data = await shopifyGraphQL(q, { q: search });
     const orders = data?.data?.orders?.nodes || [];
     console.log(`Reminder check: ${orders.length} fulfilled order(s) mile (REMINDER_DAYS=${REMINDER_DAYS})`);
@@ -1693,9 +1688,7 @@ async function runReminders() {
       const days = (Date.now() - Math.min(...times)) / 86400000;
       if (days < REMINDER_DAYS) continue;
 
-      const phone = cleanPhone(
-        o.shippingAddress?.phone || o.phone || o.customer?.phone
-      );
+      const phone = cleanPhone(o.shippingAddress?.phone || o.phone || o.customer?.phone);
       if (!phone) {
         console.warn(`Reminder ${o.name}: phone nahi mila`);
         remindedOrders.add(orderId);
@@ -1705,10 +1698,7 @@ async function runReminders() {
 
       remindedOrders.add(orderId);
       try {
-        const name = cleanText(
-          o.shippingAddress?.firstName || o.customer?.firstName || "Customer",
-          60
-        );
+        const name = cleanText(o.shippingAddress?.firstName || o.customer?.firstName || "Customer", 60);
         const waRes = await sendWhatsApp({
           to: phone,
           type: "template",
@@ -1752,7 +1742,6 @@ app.get("/cron/reminders", (req, res) => {
 });
 
 // ---------- Auto-cancel: unpaid order, 24 ghante me koi jawab nahi ----------
-
 async function cancelShopifyOrder(orderId, note) {
   const m = `mutation($id: ID!, $note: String) {
     orderCancel(orderId: $id, reason: OTHER, refund: false, restock: true, notifyCustomer: false, staffNote: $note) {
@@ -1772,14 +1761,12 @@ async function getOrderTags(orderId) {
 }
 
 let autoCancelRunning = false;
-
 async function runAutoCancel({ dry = false } = {}) {
   const out = [];
   if (!AUTO_CANCEL) return ["AUTO_CANCEL=off hai, kuch nahi kiya"];
   if (!db) return ["MongoDB connected nahi hai, safety ke liye auto-cancel skip"];
   if (autoCancelRunning) return ["Pehle se chal raha hai"];
   autoCancelRunning = true;
-
   try {
     const cutoff = new Date(Date.now() - AUTO_CANCEL_HOURS * 3600000);
     const oldest = new Date(Date.now() - 7 * 86400000).toISOString();
@@ -1814,6 +1801,7 @@ async function runAutoCancel({ dry = false } = {}) {
       if (o.cancelledAt) continue;
       if (o.displayFinancialStatus !== "PENDING") continue;
       if (o.displayFulfillmentStatus !== "UNFULFILLED") continue;
+
       // Message gaya hi nahi to cancel nahi (customer ko pata hi nahi chala)
       if (!tags.includes("wa-pending") && !tags.includes("wa-cod-frozen")) {
         out.push(`${o.name}: skip (customer ko message gaya hi nahi)`);
@@ -1823,11 +1811,13 @@ async function runAutoCancel({ dry = false } = {}) {
         out.push(`${o.name}: skip (message fail/phone nahi)`);
         continue;
       }
+
       const phone = cleanPhone(o.shippingAddress?.phone || o.phone || o.customer?.phone);
       if (!phone) {
         out.push(`${o.name}: skip (phone nahi)`);
         continue;
       }
+
       // Order ke baad customer ka koi bhi message aaya ho to cancel nahi
       const created = new Date(o.createdAt).getTime();
       const replied = (conversations.get(phone)?.messages || []).some(
@@ -1843,7 +1833,10 @@ async function runAutoCancel({ dry = false } = {}) {
         continue;
       }
 
-      const cr = await cancelShopifyOrder(orderId, `Auto-cancel: customer ne ${AUTO_CANCEL_HOURS} ghante me reply/payment nahi kiya`);
+      const cr = await cancelShopifyOrder(
+        orderId,
+        `Auto-cancel: customer ne ${AUTO_CANCEL_HOURS} ghante me reply/payment nahi kiya`
+      );
       if (!cr.ok) {
         out.push(`${o.name}: cancel fail ${JSON.stringify(cr.errs)}`);
         continue;
@@ -1865,7 +1858,10 @@ async function runAutoCancel({ dry = false } = {}) {
                 {
                   type: "body",
                   parameters: [
-                    { type: "text", text: cleanText(o.shippingAddress?.firstName || o.customer?.firstName || "Customer", 60) },
+                    {
+                      type: "text",
+                      text: cleanText(o.shippingAddress?.firstName || o.customer?.firstName || "Customer", 60),
+                    },
                     { type: "text", text: String(o.name) },
                   ],
                 },
@@ -1885,9 +1881,7 @@ async function runAutoCancel({ dry = false } = {}) {
 }
 
 // ---------- Delivery ke baad: RTO tag + review request ----------
-
 let lastPostDelivery = 0;
-
 async function runPostDelivery({ force = false } = {}) {
   const out = [];
   // 5 minute ke cron se bulane par bhi sirf 30 minute me ek baar
@@ -1929,14 +1923,18 @@ async function runPostDelivery({ force = false } = {}) {
     if (!REVIEW_TEMPLATE || !REVIEW_URL) continue;
     if (tags.includes("wa-review-asked")) continue;
     if (!tags.some((t) => t.startsWith("wa-"))) continue; // bot ke dekhe hue orders hi
-    const delivered = ful.filter((f) => ["DELIVERED", "MARKED_AS_DELIVERED"].includes(String(f.displayStatus || "").toUpperCase()));
+    const delivered = ful.filter((f) =>
+      ["DELIVERED", "MARKED_AS_DELIVERED"].includes(String(f.displayStatus || "").toUpperCase())
+    );
     if (!delivered.length) continue;
     const when = Math.max(...delivered.map((f) => Date.parse(f.deliveredAt || f.updatedAt) || 0));
     const days = (Date.now() - when) / 86400000;
     if (!when || days < REVIEW_DELAY_DAYS || days > 14) continue;
+
     const phone = cleanPhone(o.shippingAddress?.phone || o.phone || o.customer?.phone);
     if (!phone) continue;
     if (!(await claimOrder(`review_${o.legacyResourceId}`))) continue;
+
     try {
       await sendWhatsApp({
         to: phone,
@@ -1948,7 +1946,10 @@ async function runPostDelivery({ force = false } = {}) {
             {
               type: "body",
               parameters: [
-                { type: "text", text: cleanText(o.shippingAddress?.firstName || o.customer?.firstName || "Customer", 60) },
+                {
+                  type: "text",
+                  text: cleanText(o.shippingAddress?.firstName || o.customer?.firstName || "Customer", 60),
+                },
                 { type: "text", text: String(o.name) },
                 { type: "text", text: REVIEW_URL },
               ],
@@ -1969,7 +1970,6 @@ async function runPostDelivery({ force = false } = {}) {
 }
 
 // ---------- Roz ka summary (kal ke orders) ----------
-
 async function buildSummary() {
   // Kal ka din, India time (IST) ke hisaab se
   const IST = 5.5 * 3600000;
@@ -2029,7 +2029,10 @@ async function sendSummary() {
     await sendWhatsApp({ to: OWNER_PHONE, type: "text", text: { body: text } });
     return `${text}\n\n(WhatsApp text me bhej diya)`;
   } catch (err) {
-    console.log("Summary text nahi gaya (24h window band), template try:", JSON.stringify(err.response?.data?.error?.message || err.message));
+    console.log(
+      "Summary text nahi gaya (24h window band), template try:",
+      JSON.stringify(err.response?.data?.error || err.message)
+    );
   }
   if (!SUMMARY_TEMPLATE) return `${text}\n\n(Text nahi gaya aur SUMMARY_TEMPLATE set nahi hai)`;
   try {
@@ -2108,7 +2111,7 @@ async function runPaidSweep({ dry = false } = {}) {
       {
         id: o.legacyResourceId,
         name: o.name,
-        cancelled_at: o.cancelledAt,
+  cancelled_at: o.cancelledAt,
         fulfillment_status: null,
         shipping_address: { first_name: o.shippingAddress?.firstName },
         customer: { first_name: o.customer?.firstName },
@@ -2161,3 +2164,4 @@ app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
   }
   app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
 })();
+    
