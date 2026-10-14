@@ -280,6 +280,7 @@ async function initDb() {
     conversations.set(String(d._id), {
       name: d.name || "",
       needsHuman: !!d.needsHuman,
+      awaiting: d.awaiting || null,
       messages: Array.isArray(d.messages) ? d.messages : [],
     });
   }
@@ -308,7 +309,7 @@ async function persistConversation(phone) {
   try {
     await db.collection("conversations").replaceOne(
       { _id: phone },
-      { _id: phone, name: c.name || "", needsHuman: !!c.needsHuman, messages: c.messages, updatedAt: new Date() },
+      { _id: phone, name: c.name || "", needsHuman: !!c.needsHuman, awaiting: c.awaiting || null, messages: c.messages, updatedAt: new Date() },
       { upsert: true }
     );
   } catch (err) {
@@ -466,6 +467,80 @@ function markNeedsHuman(phone, value) {
   }
 }
 
+// ---------- UPI payment ka intezaar (PENDING_UPI_PAYMENT) ----------
+// Jab customer ko UPI payment manga jata hai: order par tag wa-awaiting-upi + chat me "awaiting" yaad rakhte hain.
+// Jab tak payment verify na ho (aap Mark as paid karo), Confirm ya koi bhi message order confirm nahi karta, sirf reminder jata hai.
+
+function setAwaiting(phone, info) {
+  let c = conversations.get(phone);
+  if (!c) {
+    c = { name: "", messages: [] };
+    conversations.set(phone, c);
+  }
+  c.awaiting = info;
+  queueSave(phone);
+}
+
+function clearAwaiting(phone, orderId) {
+  const c = conversations.get(phone);
+  if (c?.awaiting && (!orderId || String(c.awaiting.orderId) === String(orderId))) {
+    c.awaiting = null;
+    queueSave(phone);
+  }
+}
+
+function upiReminderText(a) {
+  const lines = [
+    `🙏 Aapka order${a?.orderName ? " " + a.orderName : ""} abhi confirm nahi hua hai.`,
+    "",
+    "Pehle di gayi UPI ID par payment karein:",
+  ];
+  if (a?.amount) lines.push(`💰 Amount: ₹${a.amount}`);
+  lines.push(`📲 UPI: ${a?.upi || UPI_ID}`);
+  lines.push("", "📸 Payment ke baad screenshot isi chat mein bhejein. Payment verify hote hi order confirm ho jayega ✅");
+  return lines.join("\n");
+}
+
+const upiRemindedAt = new Map();
+async function sendUpiReminder(phone, aw) {
+  // Ek saath kai message aaye to ek hi reminder (30 second me)
+  if (Date.now() - (upiRemindedAt.get(phone) || 0) < 30000) return;
+  upiRemindedAt.set(phone, Date.now());
+  const text = upiReminderText(aw);
+  await sendText(phone, text(phone, text);
+  addMessage(phone, "out", text);
+}
+
+async function getOrderInfo(orderId) {
+  const q = `query($id: ID!) { order(id: $id) { tags cancelledAt displayFinancialStatus } }`;
+  const data = await shopifyGraphQL(q, { id: `gid://shopify/Order/${orderId}` });
+  const o = data?.data?.order;
+  return o ? { tags: o.tags || [], cancelledAt: o.cancelledAt, paid: o.displayFinancialStatus === "PAID" } : null;
+}
+
+// Is customer ka koi order abhi bhi UPI payment ka intezaar kar raha hai? (cancel/paid ho chuka to state saaf)
+async function activeAwaiting(phone) {
+  const aw = conversations.get(phone)?.awaiting;
+  if (!aw) return null;
+  try {
+    const info = await getOrderInfo(aw.orderId);
+    if (info) {
+      const done =
+        info.cancelledAt ||
+        info.paid ||
+        ["wa-paid", "wa-cancelled", "wa-auto-cancelled"].some((t) => info.tags.includes(t)) ||
+        !info.tags.includes("wa-awaiting-upi");
+      if (done) {
+        clearAwaiting(phone, aw.orderId);
+        return null;
+      }
+    }
+  } catch (err) {
+    console.error("awaiting check error:", err.response?.data || err.message);
+  }
+  return aw;
+}
+
 // ---------- Shopify se live jaankari (AI ke liye) ----------
 
 let productsCache = { time: 0, text: "" };
@@ -495,7 +570,7 @@ async function getProductsText() {
   } catch (err) {
     console.error("products fetch error:", err.response?.data || err.message);
     return productsCache.text || "";
-    }
+  }
 }
 
 let ordersCache = { time: 0, nodes: [] };
@@ -848,7 +923,7 @@ async function checkAddress(addr) {
   // 6. City: sirf halka warning (address galat nahi maante, customer se galti ho sakti hai)
   //    city pincode ke district ya kisi post office ke naam se na mile to warning
   const warnings = [];
-  const cityTxt = cleanText(addr.city);
+   const cityTxt = cleanText(addr.city);
   if (cityTxt) {
     const candidates = [...(pinInfo.districts || []), ...(pinInfo.names || [])];
     const cityOk = candidates.some((n) => sim(n, cityTxt) >= 0.75 || foundInText(n, cityTxt));
@@ -857,8 +932,9 @@ async function checkAddress(addr) {
         `city "${cityTxt}" pincode se match nahi (district: ${pinInfo.district}, area: ${(pinInfo.names || []).slice(0, 4).join(", ")})`
       );
     }
-      }
-    return { problems, warnings, pinInfo, unknown: false };
+  }
+
+  return { problems, warnings, pinInfo, unknown: false };
 }
 
 let cachedToken = null;
@@ -990,8 +1066,9 @@ async function notifyPaid(order, phone) {
       },
     });
     console.log("Payment received Meta response:", JSON.stringify(r.data));
-    await addTags(order.id, ["wa-paid"]);
-    await removeTags(order.id, ["wa-pending"]);
+    await addTags(order.id, ["wa-paid", "wa-confirmed"]);
+    await removeTags(order.id, ["wa-pending", "wa-awaiting-upi"]);
+    clearAwaiting(phone, order.id);
     addMessage(phone, "out", `[Payment received] Order ${order.name}`);
     console.log(`Order ${order.name}: payment received message bheja -> ${phone}`);
     return true;
@@ -1094,6 +1171,65 @@ async function computePrepaidOffer(order) {
   discount = Math.min(Math.round(discount), Math.floor(total));
   const label = allPct && pcts.size === 1 ? `${[...pcts][0]}%` : `Rs ${discount}`;
   return { discount, label, finalAmount: Math.round(total - discount) };
+}
+
+// High-risk COD ya amount rule: UPI payment ka offer bhejta hai (Confirm/Cancel message ki jagah). true = bhej diya
+async function trySendPrepaidOffer({ order, phone, customerName, cod, total, risk, phoneHist, codFrozen }) {
+  try {
+    if (!(PREPAID_OFFER_TEMPLATE && UPI_ID && cod && !codFrozen && !risk?.trusted)) return false;
+    // Purana customer = pehle koi order jo cancel/block/RTO na hua ho
+    const isOld = (phoneHist || []).some(
+      (o) =>
+        !o.cancelled &&
+        !["wa-cancelled", "wa-auto-cancelled", "wa-blocked", "rto"].some((t) => o.tags.includes(t))
+    );
+    const minAmount = isOld ? PREPAID_OLD_MIN : PREPAID_NEW_MIN;
+    const byAmount = minAmount > 0 && total > minAmount;
+    const byRisk = !!risk && risk.score >= HIGH_RISK_SCORE;
+    if (!byRisk && !byAmount) return false;
+    const why = [byRisk ? "high-risk" : "", byAmount ? `${isOld ? "purana" : "naya"} customer, amount ${total} > ${minAmount}` : ""]
+      .filter(Boolean)
+      .join(" + ");
+    const offer = await computePrepaidOffer(order);
+    if (offer.discount <= 0) {
+      console.log(`Order ${order.name}: prepaid offer skip (discount 0)`);
+      return false;
+    }
+    await sendWhatsApp({
+      to: phone,
+      type: "template",
+      template: {
+        name: PREPAID_OFFER_TEMPLATE,
+        language: { code: PREPAID_OFFER_LANG },
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: customerName },
+              { type: "text", text: String(order.name) },
+              { type: "text", text: offer.label },
+              { type: "text", text: String(offer.finalAmount) },
+              { type: "text", text: UPI_ID },
+            ],
+          },
+        ],
+      },
+    });
+    await addTags(order.id, ["wa-prepaid-offered", "wa-awaiting-upi"]);
+    setAwaiting(phone, {
+      orderId: String(order.id),
+      orderName: String(order.name),
+      amount: String(offer.finalAmount),
+      upi: UPI_ID,
+      since: Date.now(),
+    });
+    addMessage(phone, "out", `[Prepaid offer] Order ${order.name}: ${offer.label} off, Rs ${offer.finalAmount}`);
+    console.log(`Order ${order.name}: prepaid offer bheja (${why}) ${offer.label} off, payable Rs ${offer.finalAmount}. Ab UPI payment ka intezaar`);
+    return true;
+  } catch (err) {
+    console.error("prepaid offer error (normal confirmation jayega):", JSON.stringify(err.response?.data || err.message));
+    return false;
+  }
 }
 
 // ---------- Shopify webhook: orders/create ----------
@@ -1238,7 +1374,8 @@ app.post(
             sentMessage = true;
             const freezeWhy = rtoPin ? `pincode ${pin} RTO list me` : problems.join(" | ");
             console.log(`Order ${order.name}: COD freeze message bheja -> ${phone} (${freezeWhy})`);
-            await addTags(order.id, ["wa-cod-frozen"]);
+            await addTags(order.id, ["wa-cod-frozen", "wa-awaiting-upi"]);
+            setAwaiting(phone, { orderId: String(order.id), orderName: String(order.name), amount: String(Math.round(total)), upi: UPI_ID, since: Date.now() });
             addMessage(
               phone,
               "out",
@@ -1254,7 +1391,20 @@ app.post(
         }
       }
 
+      // Risk pehle nikalte hain: agar order UPI payment maangega to Confirm/Cancel wala message nahi jayega
+      let risk = null;
+      try {
+        risk = await assessRisk(order, phone, { problems, cod, total, rtoPin });
+      } catch (err) {
+        console.error("risk check error:", err.response?.data || err.message);
+      }
+      let offerSent = false;
       if (!codFrozen && !prepaid) {
+        offerSent = await trySendPrepaidOffer({ order, phone, customerName, cod, total, risk, phoneHist, codFrozen });
+        if (offerSent) sentMessage = true;
+      }
+
+      if (!codFrozen && !prepaid && !offerSent) {
         const imageUrl = await getProductImage(order.line_items?.[0]?.product_id);
 
         const components = [
@@ -1331,67 +1481,17 @@ app.post(
       }
 
       // ---- High-risk flag (points se, bina AI) ----
-      let risk = null;
       try {
-        risk = await assessRisk(order, phone, { problems, cod, total, rtoPin });
-        console.log(
-          `Order ${order.name}: risk score ${risk.score}${risk.reasons.length ? " (" + risk.reasons.join(", ") + ")" : ""}${risk.trusted ? " | trusted customer" : ""}`
-        );
-        if (!risk.trusted && risk.score >= HIGH_RISK_SCORE) {
-          await addTags(order.id, ["wa-high-risk"]);
-        }
-      } catch (err) {
-        console.error("risk check error:", err.response?.data || err.message);
-      }
-
-      // ---- Prepaid offer: (1) high-risk COD ya (2) amount rule. Frozen COD ko pehle hi UPI message ja chuka hai ----
-      try {
-        if (PREPAID_OFFER_TEMPLATE && UPI_ID && cod && !codFrozen && !risk?.trusted) {
-          // Purana customer = pehle koi order jo cancel/block/RTO na hua ho
-          const isOld = (phoneHist || []).some(
-            (o) =>
-              !o.cancelled &&
-              !["wa-cancelled", "wa-auto-cancelled", "wa-blocked", "rto"].some((t) => o.tags.includes(t))
+        if (risk) {
+          console.log(
+            `Order ${order.name}: risk score ${risk.score}${risk.reasons.length ? " (" + risk.reasons.join(", ") + ")" : ""}${risk.trusted ? " | trusted customer" : ""}`
           );
-          const minAmount = isOld ? PREPAID_OLD_MIN : PREPAID_NEW_MIN;
-          const byAmount = minAmount > 0 && total > minAmount;
-          const byRisk = !!risk && risk.score >= HIGH_RISK_SCORE;
-          if (byRisk || byAmount) {
-            const why = [byRisk ? "high-risk" : "", byAmount ? `${isOld ? "purana" : "naya"} customer, amount ${total} > ${minAmount}` : ""]
-              .filter(Boolean)
-              .join(" + ");
-            const offer = await computePrepaidOffer(order);
-            if (offer.discount <= 0) {
-              console.log(`Order ${order.name}: prepaid offer skip (discount 0)`);
-            } else {
-              await sendWhatsApp({
-                to: phone,
-                type: "template",
-                template: {
-                  name: PREPAID_OFFER_TEMPLATE,
-                  language: { code: PREPAID_OFFER_LANG },
-                  components: [
-                    {
-                      type: "body",
-                      parameters: [
-                        { type: "text", text: customerName },
-                        { type: "text", text: String(order.name) },
-                        { type: "text", text: offer.label },
-                        { type: "text", text: String(offer.finalAmount) },
-                        { type: "text", text: UPI_ID },
-                      ],
-                    },
-                  ],
-                },
-              });
-              await addTags(order.id, ["wa-prepaid-offered"]);
-              addMessage(phone, "out", `[Prepaid offer] Order ${order.name}: ${offer.label} off, Rs ${offer.finalAmount}`);
-              console.log(`Order ${order.name}: prepaid offer bheja (${why}) ${offer.label} off, payable Rs ${offer.finalAmount}`);
-            }
+          if (!risk.trusted && risk.score >= HIGH_RISK_SCORE) {
+            await addTags(order.id, ["wa-high-risk"]);
           }
         }
       } catch (err) {
-        console.error("prepaid offer error:", JSON.stringify(err.response?.data || err.message));
+        console.error("risk tag error:", err.response?.data || err.message);
       }
     } catch (err) {
       console.error("orders-create error:", err.response?.data || err.message);
@@ -1454,13 +1554,20 @@ app.post("/webhook", async (req, res) => {
             if (!orderId) continue;
 
             let alreadyAutoCancelled = false;
+            let awaitingUpi = false;
             if (action === "CONFIRM") {
               try {
-                alreadyAutoCancelled = (await getOrderTags(orderId)).includes("wa-auto-cancelled");
+                const tg = await getOrderTags(orderId);
+                alreadyAutoCancelled = tg.includes("wa-auto-cancelled");
+                awaitingUpi = tg.includes("wa-awaiting-upi") && !tg.includes("wa-paid");
               } catch (e) {}
             }
 
-            if (alreadyAutoCancelled) {
+            if (awaitingUpi) {
+              // Payment verify nahi hui: confirm nahi karte, UPI ka reminder dete hain
+              const aw = conversations.get(msg.from)?.awaiting;
+              await sendUpiReminder(msg.from, aw && String(aw.orderId) === String(orderId) ? aw : null);
+            } else if (alreadyAutoCancelled) {
               await sendText(
                 msg.from,
                 "Sorry 🙏 24 ghante tak reply na aane se ye order cancel ho gaya tha. Aap chahein to Bazoora par dobara order kar sakte hain 😊"
@@ -1474,7 +1581,8 @@ app.post("/webhook", async (req, res) => {
               );
             } else if (action === "CANCEL") {
               await addTags(orderId, ["wa-cancelled"]);
-              await removeTags(orderId, ["wa-pending", "wa-confirmed"]);
+              await removeTags(orderId, ["wa-pending", "wa-confirmed", "wa-awaiting-upi"]);
+              clearAwaiting(msg.from, orderId);
               await sendText(
                 msg.from,
                 "Hello! 🙏 Aapka cancel request humne note kar liya hai, aur hamari team jaldi ise process kar degi 😊\n\nUmeed hai future mein hum aapki seva kar paayenge 🛍️✨\nBazoora chunne ke liye Thank you! ❤️"
@@ -1485,8 +1593,14 @@ app.post("/webhook", async (req, res) => {
             // Photo/video/screenshot: inbox me red nishan + customer ko ek chhota fixed reply (AI nahi)
             markNeedsHuman(msg.from, true);
             await ackMedia(msg.from);
-          } else if (AI_REPLY && msg.type === "text" && GEMINI_API_KEY) {
-            await handleAiReply(msg);
+          } else {
+            // UPI payment ka intezaar chal raha ho to AI nahi, sirf payment ka reminder
+            const aw = await activeAwaiting(msg.from);
+            if (aw) {
+              await sendUpiReminder(msg.from, aw);
+            } else if (AI_REPLY && msg.type === "text" && GEMINI_API_KEY) {
+              await handleAiReply(msg);
+            }
           }
         }
       }
@@ -1901,7 +2015,7 @@ async function runAutoCancel({ dry = false } = {}) {
       if (o.displayFinancialStatus !== "PENDING") continue;
       if (o.displayFulfillmentStatus !== "UNFULFILLED") continue;
       // Message gaya hi nahi to cancel nahi (customer ko pata hi nahi chala)
-      if (!tags.includes("wa-pending") && !tags.includes("wa-cod-frozen")) {
+      if (!tags.includes("wa-pending") && !tags.includes("wa-cod-frozen") && !tags.includes("wa-awaiting-upi")) {
         out.push(`${o.name}: skip (customer ko message gaya hi nahi)`);
         continue;
       }
@@ -1916,8 +2030,10 @@ async function runAutoCancel({ dry = false } = {}) {
       }
       // Order ke baad customer ka koi bhi message aaya ho to cancel nahi
       const created = new Date(o.createdAt).getTime();
+      // UPI ka intezaar karne wale order ko sirf screenshot/photo bachata hai (sirf "ok" ya Confirm nahi)
+      const upiWait = tags.includes("wa-awaiting-upi");
       const replied = (conversations.get(phone)?.messages || []).some(
-        (m) => m.dir === "in" && m.time > created
+        (m) => m.dir === "in" && m.time > created && (!upiWait || m.media)
       );
       if (replied) {
         out.push(`${o.name}: skip (customer ne reply kiya)`);
@@ -1935,7 +2051,8 @@ async function runAutoCancel({ dry = false } = {}) {
         continue;
       }
       await addTags(orderId, ["wa-auto-cancelled"]);
-      await removeTags(orderId, ["wa-pending"]);
+      await removeTags(orderId, ["wa-pending", "wa-awaiting-upi"]);
+      clearAwaiting(phone, orderId);
       out.push(`${o.name}: auto-cancel + restock ho gaya`);
       console.log(`Auto-cancel: ${o.name} (${phone})`);
 
@@ -2084,7 +2201,7 @@ async function buildSummary() {
   const stats = {
     total: orders.length,
     confirmed: n((o) => has(o, "wa-confirmed")),
-    waiting: n((o) => !o.cancelledAt && has(o, "wa-pending") && !has(o, "wa-confirmed") && !has(o, "wa-paid")),
+    waiting: n((o) => !o.cancelledAt && (has(o, "wa-pending") || has(o, "wa-awaiting-upi")) && !has(o, "wa-confirmed") && !has(o, "wa-paid")),
     custCancel: n((o) => has(o, "wa-cancelled")),
     autoCancel: n((o) => has(o, "wa-auto-cancelled") && !has(o, "wa-blocked")),
     blocked: n((o) => has(o, "wa-blocked")),
