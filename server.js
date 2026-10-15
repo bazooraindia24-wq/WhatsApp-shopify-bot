@@ -30,7 +30,7 @@ const TEMPLATE_LANG = "en";
 const REMINDER_TEMPLATE = "delivery_reminder";
 const REMINDER_LANG = "en";
 // Fulfill ke kitne din baad reminder (default 3)
-const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 0);
+const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 3);
 // Tracking link na mile to reminder me ye link jayega (Render me REMINDER_FALLBACK_URL se badal sakte ho)
 const REMINDER_FALLBACK_URL = (process.env.REMINDER_FALLBACK_URL || "https://shiprocket.co/track").trim();
 
