@@ -30,7 +30,9 @@ const TEMPLATE_LANG = "en";
 const REMINDER_TEMPLATE = "delivery_reminder";
 const REMINDER_LANG = "en";
 // Fulfill ke kitne din baad reminder (default 3)
-const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 0);
+const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 3);
+// Tracking link na mile to reminder me ye link jayega (Render me REMINDER_FALLBACK_URL se badal sakte ho)
+const REMINDER_FALLBACK_URL = (process.env.REMINDER_FALLBACK_URL || "https://shiprocket.co/track").trim();
 
 // ---------- Naye settings (sab Render ke Environment me badal sakte ho, code nahi) ----------
 // MongoDB: inbox ke messages deploy ke baad bhi bache rahein
@@ -1407,7 +1409,7 @@ app.post(
       // ---- Pehle address aur risk dekhte hain (bina AI), taaki sahi message jaye ----
       let addrResult = null;
       try {
-         addrResult = await checkAddress(order.shipping_address);
+        addrResult = await checkAddress(order.shipping_address);
       } catch (err) {
         console.error("address check error:", err.response?.data || err.message);
       }
@@ -1787,7 +1789,7 @@ app.get("/inbox/media", async (req, res) => {
     const meta = await axios.get(`https://graph.facebook.com/${GRAPH_VERSION}/${id}`, {
       headers: auth,
       timeout: 15000,
-      });
+    });
     const fileUrl = meta.data?.url;
     if (!fileUrl) return res.status(404).send("File nahi mili");
     const file = await axios.get(fileUrl, {
@@ -1946,6 +1948,15 @@ app.post("/inbox/reply", async (req, res) => {
 });
 
 // ---------- Delivery reminder (roz cron-job.org se chalega) ----------
+// Fulfillments me se pehla tracking URL nikalta hai, na mile to fallback link
+function pickTrackUrl(fulfillments) {
+  const url = (fulfillments || [])
+    .flatMap((f) => f.trackingInfo || [])
+    .map((x) => String(x?.url || "").trim())
+    .find(Boolean);
+  return url || REMINDER_FALLBACK_URL;
+}
+
 async function runReminders() {
   if (reminderRunning) {
     console.log("Reminder check pehle se chal raha hai, ye skip");
@@ -1963,7 +1974,7 @@ async function runReminders() {
           phone
           customer { firstName phone }
           shippingAddress { firstName name address1 address2 city province zip phone }
-          fulfillments(first: 5) { createdAt }
+          fulfillments(first: 5) { createdAt trackingInfo { number url company } }
         }
       }
     }`;
@@ -2009,6 +2020,7 @@ async function runReminders() {
                   { type: "text", text: name },
                   { type: "text", text: String(o.name) },
                   { type: "text", text: formatAddress(o.shippingAddress) },
+                  { type: "text", text: pickTrackUrl(o.fulfillments) },
                 ],
               },
             ],
@@ -2445,4 +2457,4 @@ app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
   }
   app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
 })();
-    
+                                                      
