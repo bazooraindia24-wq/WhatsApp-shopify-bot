@@ -30,7 +30,7 @@ const TEMPLATE_LANG = "en";
 const REMINDER_TEMPLATE = "delivery_reminder";
 const REMINDER_LANG = "en";
 // Fulfill ke kitne din baad reminder (default 3)
-const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 3);
+const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 0);
 
 // ---------- Naye settings (sab Render ke Environment me badal sakte ho, code nahi) ----------
 // MongoDB: inbox ke messages deploy ke baad bhi bache rahein
