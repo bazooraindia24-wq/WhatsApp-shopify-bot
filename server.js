@@ -426,7 +426,7 @@ function buildHistory(phone) {
   while (contents.length && contents[0].role !== "user") contents.shift();
   return contents;
 }
-functtion markNeedsHuman(phone, value) {
+function markNeedsHuman(phone, value) {
   const c = conversations.get(phone);
   if (c) {
     c.needsHuman = value;
