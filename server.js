@@ -1646,7 +1646,7 @@ app.post("/webhook", async (req, res) => {
             }
             console.log(`Reply: ${action} order ${orderId}`);
           } else if (media) {
-            // UPI intezaar me screenshot aaye to payment-verify wala reply,, warna purana fixed reply
+            // UPI intezaar me screenshot aaye to payment-verify wala reply, warna purana fixed reply
             const awM = conversations.get(msg.from)?.awaiting;
             if (awM) {
               await ackPaymentScreenshot(msg.from, awM);
@@ -1720,7 +1720,16 @@ body{font-family:'Segoe UI',Helvetica,Arial,sans-serif;margin:0;background:var(-
 .ord-box{background:var(--panel-bg);padding:10px;border-radius:8px;margin-bottom:10px;}
 .mm{max-width:100%;max-height:240px;border-radius:6px;display:block;margin-bottom:6px;}
 audio.mm{width:100%;}
-@media(max-width:900px){.ecommerce-sidebar{display:none;}.sidebar{width:100%;}.chat-main{display:none;}}
+.back{display:none;color:var(--primary);text-decoration:none;font-size:22px;margin-right:10px;}
+@media(max-width:900px){
+.ecommerce-sidebar{display:none;}
+.sidebar{width:100%;}
+.app-container:not(.has-chat) .chat-main{display:none;}
+.app-container.has-chat .sidebar{display:none;}
+.app-container.has-chat .chat-main{display:flex;width:100%;}
+.back{display:inline-block;}
+.msg{max-width:85%;}
+}
 </style>
 <script src="/socket.io/socket.io.js"></script>
 </head><body>${body}</body></html>`;
@@ -1895,7 +1904,7 @@ app.get("/inbox", async (req, res) => {
       mainHtml = `
         <div class="chat-main">
           <div class="chat-header">
-            <span>${esc(c.name || "Customer")} (+${esc(activePhone)})</span>
+            <span><a class="back" href="/inbox?key=${k}">&larr;</a>${esc(c.name || "Customer")} (+${esc(activePhone)})</span>
             <button onclick="toggleHuman(${jsPhone}, ${!c.needsHuman})" style="background:${c.needsHuman ? '#ea0038' : 'var(--primary)'};color:#fff;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;">
               ${c.needsHuman ? 'AI Bot Paused (Human Active)' : 'AI Bot Active'}
             </button>
@@ -1920,7 +1929,8 @@ app.get("/inbox", async (req, res) => {
     }
   }
 
-  const html = `<div class="app-container">${sidebarHtml}${mainHtml}</div>
+  const hasChat = !!(activePhone && conversations.get(activePhone));
+  const html = `<div class="app-container${hasChat ? " has-chat" : ""}">${sidebarHtml}${mainHtml}</div>
   <script>
     const INBOX_KEY = ${jsKey};
     const ACTIVE_PHONE = ${jsPhone};
@@ -1964,7 +1974,7 @@ app.get("/inbox", async (req, res) => {
       fetch('/inbox/toggle-human', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: INBOX_KEY, phone: phone, status: status })
+         body: JSON.stringify({ key: INBOX_KEY, phone: phone, status: status })
       }).then(function () { window.location.reload(); });
     }
   </script>`;
@@ -2510,5 +2520,5 @@ app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
   }
   server.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
 })();
-              
-          
+                  
+       
