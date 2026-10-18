@@ -2408,10 +2408,12 @@ async function proNightReply(phone) {
 function proWantsPayInfo(text) {
   const t = String(text || "").toLowerCase().trim();
   if (!t || t.length > 200) return false;
-  const topic = /(\bqr\b|qr code|scanner|scan kar|\bupi\b|gpay|google pay|phonepe|phone pe|paytm|bank details|account number|account no|bank account|ifsc|payment (kaise|kahan|kahaan|kidhar|link|details|karu|karna|krna|kre))/;
-  const ask = /(kya|batao|bta|bhejo|bhej do|send|share|\bdo\b|de do|dedo|chahiye|chaiye|kaise|kahan|kahaan|kidhar|where|how|\?|please|plz|pls|\bid\b|number|detail)/;
-  const done = /(kar diya|kar di\b|kr diya|kr di\b|ho gaya|hogaya|ho gya|paid|done|successful|screenshot|kat gaye|kat gaya|failed|nahi ho raha|nhi ho raha|refund)/;
-  return topic.test(t) && ask.test(t) && !done.test(t);
+  const strong = /(\bqr\b|qr code|scanner|scan kar|\bupi\b|bank details|account number|account no|bank account|ifsc)/;
+  const weak = /(gpay|google pay|phonepe|phone pe|paytm|payment|pay kar|online pay)/;
+  const ask = /(kya|batao|bta|bhejo|bhej do|bhejna|send|share|\bdo\b|de do|dedo|dena|\bden\b|dijiye|dijiyega|dijiy|dijie|chahiye|chaiye|chahie|kaise|kahan|kahaan|kidhar|where|how|\?|please|plz|pls|\bid\b|number|detail|karni|karna|krna|karu|karun|karo|kare|kre)/;
+  const done = /(kar diya|kar di\b|kr diya|kr di\b|kar dia|ho gaya|hogaya|ho gya|paid|done|successful|screenshot|kat gaye|kat gaya|failed|nahi ho raha|nhi ho raha|refund|bhej diya|bhej di\b|bhej dia|bhej chuka|kar chuka|kar liya|kr liya|pay kiya|payment kiya|kiya tha|kiya hai|kia tha)/;
+  if (done.test(t)) return false;
+  return strong.test(t) || (weak.test(t) && ask.test(t));
 }
 function proUpiId() {
   return pro.payInfo.upi || UPI_ID || "";
@@ -3095,7 +3097,7 @@ app.post("/inbox/api/pro/send-catalog", ...proApi(async (req, res) => {
 app.get("/inbox/api/pro/scheduled", ...proApi(async (req, res) => {
   const p = req.query.c ? normPhone(req.query.c) : "";
   res.json({ items: pro.scheduled.filter((s) => !p || s.phone === p).sort((a, b) => b.at - a.at).slice(0, 100) });
-}));90
+}));
 app.post("/inbox/api/pro/scheduled", ...proApi(async (req, res) => {
   const b = req.body || {};
   if (b.op === "del") {
@@ -3469,7 +3471,7 @@ function proClient() {
     }
   }
   // ---- 9) Pro settings ----
-function openPro(tab) {
+  function openPro(tab) {
     loadCfg().then(function (c) {
       var own = isOwner();
       var all = [["sch", "⏰ Scheduled"], ["ref", "💸 Refund"], ["rev", "⭐ Review"]];
@@ -3545,7 +3547,7 @@ function openPro(tab) {
     }).catch(fail);
   }
   // ---- click routing ----
-  document.addEventListener("click", function (e) {
+document.addEventListener("click", function (e) {
     var t = e.target;
     if (t.closest("[data-pclose]")) return closeModal();
     var pm = t.closest("[data-pm]");
@@ -3762,7 +3764,7 @@ const INBOX_JS = String.raw`(function () {
   "use strict";
 
   var S = {
-    chats: [], counts: {}, sources: [], labels: [], totalUnread: 0,
+  chats: [], counts: {}, sources: [], labels: [], totalUnread: 0,
     f: "all", q: "", source: "", label: "",
     cur: null, chat: null, rev: "", limit: 150, replyTo: null,
     settings: null, orders: null, showOrders: false, showNotes: false,
@@ -4063,7 +4065,7 @@ const INBOX_JS = String.raw`(function () {
         ["📨 Template message", function () { openTemplate(); }]
       ], true);
     };
-    $("#bQuick").onclick = function (e) {
+     $("#bQuick").onclick = function (e) {
       e.stopPropagation();
       var list = (S.settings && S.settings.quickReplies) || [];
       if (!list.length) { toast("Quick replies nahi hain. Settings me jodein."); return; }
@@ -5453,7 +5455,7 @@ app.post(
       if (aud.type === "label" && !(meta.labels || []).includes(String(aud.value))) continue;
       if (aud.type === "source" && meta.source !== String(aud.value)) continue;
       targets.push(p);
-  }
+    }
     if (b.dry) return res.json({ count: targets.length });
     if (!b.confirm) return res.status(400).json({ error: "Confirm chahiye" });
     if (broadcastJob && !broadcastJob.done) return res.status(409).json({ error: "Pehla broadcast abhi chal raha hai" });
@@ -5707,7 +5709,7 @@ async function runAutoCancel({ dry = false } = {}) {
 let lastPostDelivery = 0;
 async function runPostDelivery({ force = false } = {}) {
   const out = [];
-  // 5 minute ke cron se bulane par bhi sirf 30 minute me ek baar
+   // 5 minute ke cron se bulane par bhi sirf 30 minute me ek baar
   if (!force && Date.now() - lastPostDelivery < POST_DELIVERY_GAP_MIN * 60000) return out;
   lastPostDelivery = Date.now();
   const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
@@ -5930,7 +5932,7 @@ async function runPaidSweep({ dry = false } = {}) {
     out.push(`${o.name}: ${sent ? "payment_received bheja" : "skip/fail"}`);
   }
   return out;
-  }
+}
 app.get("/cron/auto-cancel", async (req, res) => {
   if (!CRON_SECRET || req.query.key !== CRON_SECRET) {
     return res.status(403).send("Forbidden");
@@ -5970,4 +5972,4 @@ app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
   }
   await loadInboxSettings();
   app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
-})();                                                                  
+})();                                                                          
