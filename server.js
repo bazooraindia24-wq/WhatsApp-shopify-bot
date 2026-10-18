@@ -5970,6 +5970,4 @@ app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
   }
   await loadInboxSettings();
   app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
-})();
-    
-                                                                                             }
+})();                                                                  
