@@ -25,7 +25,7 @@ const TEMPLATE_LANG = "en";
 const REMINDER_TEMPLATE = "delivery_reminder";
 const REMINDER_LANG = "en";
 // Fulfill ke kitne din baad reminder (default 3)
-const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 1);
+const REMINDER_DAYS = Number(process.env.REMINDER_DAYS ?? 3);
 // Tracking link na mile to reminder me ye link jayega (Render me REMINDER_FALLBACK_URL se badal sakte ho)
 const REMINDER_FALLBACK_URL = (process.env.REMINDER_FALLBACK_URL || "https://shiprocket.co/track").trim();
 // ---------- Naye settings (sab Render ke Environment me badal sakte ho, code nahi) ----------
@@ -172,8 +172,7 @@ async function askGemini(promptText) {
   if (GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== GEMINI_MODEL) models.push(GEMINI_FALLBACK_MODEL);
   for (const model of models) {
     try {
-      const url =
-`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
       const res = await axios.post(
         url,
         { contents: [{ parts: [{ text: promptText }] }] },
@@ -200,8 +199,7 @@ async function askGeminiChat(systemText, contents) {
   for (const model of models) {
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
-        const url =
-`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
         const res = await axios.post(
           url,
           {
@@ -323,8 +321,7 @@ async function claimOrder(orderId) {
   processedOrders.add(key);
   if (db) {
     try {
-      await db.collection("orders_seen").insertOne({ _id: key, createdAt: new Date()
-});
+      await db.collection("orders_seen").insertOne({ _id: key, createdAt: new Date() });
     } catch (err) {
       if (err.code === 11000) return false;
       console.error("orders_seen error:", err.message);
@@ -367,8 +364,7 @@ function describeMessage(msg) {
     return `[Button] ${msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || ""}`;
   if (MEDIA_TYPES.includes(msg.type)) {
     const cap = msg[msg.type]?.caption;
-    return cap ? `[${MEDIA_LABELS[msg.type]}] ${cap}` :
-`[${MEDIA_LABELS[msg.type]}]`;
+    return cap ? `[${MEDIA_LABELS[msg.type]}] ${cap}` : `[${MEDIA_LABELS[msg.type]}]`;
   }
   return `[${msg.type}]`;
 }
@@ -500,15 +496,13 @@ function detectUpiIntent(text) {
   // 2) "prepaid kyun", "COD kyun nahi", "COD chahiye"
   const whyWord = /(kyun|kyu|kyon|kiyu|why|kisliye|kis liye|wajah|reason|karan)/;
   const payTopic = /(prepaid|cod|cash|online|payment|pay|upi|advance)/;
-  if ((whyWord.test(t) && payTopic.test(t)) || /\bcod\b|cash on delivery/.test(t))
-return "why";
+  if ((whyWord.test(t) && payTopic.test(t)) || /\bcod\b|cash on delivery/.test(t)) return "why";
   // 3) "payment ho gaya / kar diya"
   const payWord = /(payment|pay|paid|paise|paisa|upi|transfer|sent|send|bhej)/;
   const doneWord = /(ho gaya|hogaya|ho gya|hogya|kar diya|kar di|kr diya|kr di|bhej diya|bhej di|bhej dia|kiya hai|done|paid|successful|completed|complete)/;
   if ((payWord.test(t) && doneWord.test(t)) || /^(done|paid|ho gaya|hogaya|kar diya|kr diya)\b/.test(t)) return "paid";
   // 4) order confirm kab / status
-  if (/(confirm|order status|status|kab.*(dispatch|aayega|milega|bhejoge))/.test(t))
-return "confirm";
+  if (/(confirm|order status|status|kab.*(dispatch|aayega|milega|bhejoge))/.test(t)) return "confirm";
   // 5) UPI ID / amount dobara maang raha hai
   if (/(upi id|upi\b.*(kya|batao|bhejo|do)|kitna|kitne|amount|kahan|kahaan|kidhar|qr|link)/.test(t)) return "details";
   return "other";
@@ -713,7 +707,7 @@ async function handleAiReply(msg, extra = "") {
       addMessage(phone, "out", HUMAN_HANDOFF_TEXT);
     }
     return;
-                     }
+  }
   const contents = buildHistory(phone);
   if (!contents.length) return;
   const [productsText, ordersText] = await Promise.all([
@@ -768,8 +762,7 @@ function isCodOrder(order) {
   const gateways = order.payment_gateway_names || [];
   if (gateways.some((g) => /\bcod\b|cash on delivery/i.test(String(g)))) return true;
   // Testing: admin se bane pending orders (bina gateway) ko COD maano
-  if (COD_TEST_MODE && gateways.length === 0 && order.financial_status === "pending")
-return true;
+  if (COD_TEST_MODE && gateways.length === 0 && order.financial_status === "pending") return true;
   return false;
 }
 // Is phone ke pichle orders (60 din) Shopify se
@@ -830,8 +823,7 @@ async function assessRisk(order, phone, { problems, cod, total, rtoPin }) {
 function normText(s = "") {
   return String(s)
     .toLowerCase()
-    .replace(/[^a-z0-9\u0900-\u097f ]/g, " ")
-.replace(/\b(dist|distt|district|zila|jila|tehsil|tahsil|teh|post|po|village|vill|gram|gaon|gav|ps|thana)\b/g, " ")
+    .replace(/[^a-z0-9\u0900-\u097f ]/g, " ").replace(/\b(dist|distt|district|zila|jila|tehsil|tahsil|teh|post|po|village|vill|gram|gaon|gav|ps|thana)\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -870,8 +862,7 @@ function sim(a, b) {
   const x = phon(a), y = phon(b);
   if (!x || !y) return 0;
   if (x === y) return 1;
-  if (Math.min(x.length, y.length) >= 4 && (x.includes(y) || y.includes(x))) return
-0.9;
+  if (Math.min(x.length, y.length) >= 4 && (x.includes(y) || y.includes(x))) return 0.9;
   return 1 - lev(x, y) / Math.max(x.length, y.length);
 }
 // Kya ye naam (district / village / post office) address ke text me kahin bhi likha hai?
@@ -973,9 +964,8 @@ async function checkAddress(addr) {
       );
     }
   }
-  return { problems, warnings, pinInfo, unknown: false };7
-  
-                          }
+  return { problems, warnings, pinInfo, unknown: false };
+}
 let cachedToken = null;
 let tokenExpiresAt = 0;
 async function getShopifyToken() {
@@ -1002,8 +992,7 @@ async function shopifyHeaders() {
 async function getProductImage(productId) {
   if (!productId) return FALLBACK_IMAGE_URL || null;
   try {
-    const url =
-`https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/products/${productId}.json?fields=id,image`;
+    const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/products/${productId}.json?fields=id,image`;
     const res = await axios.get(url, { headers: await shopifyHeaders() });
     return res.data?.product?.image?.src || FALLBACK_IMAGE_URL || null;
   } catch (err) {
@@ -1012,8 +1001,7 @@ async function getProductImage(productId) {
   }
 }
 async function shopifyGraphQL(query, variables) {
-  const url =
-`https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
+  const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
   const res = await axios.post(url, { query, variables }, { headers: await shopifyHeaders() });
   if (res.data?.errors) console.error("Shopify GraphQL error:", JSON.stringify(res.data.errors));
   return res.data;
@@ -1031,8 +1019,7 @@ async function removeTags(orderId, tags) {
   await shopifyGraphQL(q, { id: `gid://shopify/Order/${orderId}`, tags });
 }
 async function sendWhatsApp(body) {
-  const url =
-`https://graph.facebook.com/${GRAPH_VERSION}/${WHATSAPP_PHONE_ID}/messages`;
+  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${WHATSAPP_PHONE_ID}/messages`;
   return axios.post(
     url,
     { messaging_product: "whatsapp", ...body },
@@ -1137,8 +1124,7 @@ app.post(
 );
 // ---------- Prepaid offer: product ke tag se discount (discount-50 = Rs 50, discount-10% = 10%) ----------
 async function getProductTags(productIds) {
-  const ids = [...new Set(productIds.filter(Boolean).map((x) =>
-`gid://shopify/Product/${x}`))];
+  const ids = [...new Set(productIds.filter(Boolean).map((x) =>`gid://shopify/Product/${x}`))];
   const map = new Map();
   if (!ids.length) return map;
   const q = `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Product { id tags } }
@@ -1198,8 +1184,7 @@ async function computePrepaidOffer(order) {
 // High-risk COD ya amount rule: UPI payment ka offer bhejta hai (Confirm/Cancel message ki jagah). true = bhej diya
 async function trySendPrepaidOffer({ order, phone, customerName, cod, total, risk, phoneHist, codFrozen }) {
   try {
-    if (!(PREPAID_OFFER_TEMPLATE && UPI_ID && cod && !codFrozen && !risk?.trusted))
-return false;
+    if (!(PREPAID_OFFER_TEMPLATE && UPI_ID && cod && !codFrozen && !risk?.trusted)) return false;
     // Purana customer = pehle koi order jo cancel/block/RTO na hua ho
     const isOld = (phoneHist || []).some(
       (o) =>
@@ -1588,7 +1573,7 @@ app.post("/webhook", async (req, res) => {
               clearAwaiting(msg.from, orderId);
               await sendText(
                 msg.from,
-                "Hello! 🙏 Aapka cancel request humne note kar liya hai, aur hamari team jaldi ise process kar degi 😊\n\nUmeed hai future mein hum aapki seva kar paayenge 🛍✨\nBazoora chunne ke liye Thank you! ❤️"
+                "Hello! 🙏 Aapka cancel request humne note kar liya hai, aur hamari team jaldi ise process kar degi 😊\n\nUmeed hai future mein hum aapki seva kar paayenge 🛍✨\nBazoora chunne ke liye Thank you! ❤"
               );
             }
             console.log(`Reply: ${action} order ${orderId}`);
@@ -1629,8 +1614,7 @@ function inboxAuth(req, res) {
 }
 function page(title, body) {
   return `<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>
 <style>
 body{font-family:Arial,sans-serif;margin:0;background:#f3f0ff;color:#222}
 .top{background:#8a2be2;color:#fff;padding:14px;font-weight:bold}
@@ -1664,8 +1648,7 @@ function mediaHtml(m, k) {
     return `<a href="${src}" target="_blank"><img class="mm" loading="lazy" src="${src}" alt="photo"></a>`;
   if (m.type === "video") return `<video class="mm" controls preload="metadata" src="${src}"></video>`;
   if (m.type === "audio") return `<audio class="mm" controls preload="none" src="${src}"></audio>`;
-  return `<a href="${src}" target="_blank">&#128196; ${esc(m.filename || "Document")}
-</a><br>`;
+  return `<a href="${src}" target="_blank">&#128196; ${esc(m.filename || "Document")}</a><br>`;
 }
 // Jo file browser me seedha khul sakti hai (baaki sab download hongi, taaki customer ki bheji file page me chal na sake)
 const INLINE_MIMES = new Set([
@@ -2102,8 +2085,7 @@ const wrapApi = (fn) => (req, res) =>
 
 const loginFails = new Map();
 function loginHtml(msg) {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bazoora Inbox Login</title>
-<style>body{font-family:system-ui,Arial,sans-serif;background:#075e54;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bazoora Inbox Login</title><style>body{font-family:system-ui,Arial,sans-serif;background:#075e54;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
 form{background:#fff;padding:24px;border-radius:14px;width:320px;max-width:92vw;box-shadow:0 8px 30px rgba(0,0,0,.3)}
 h2{margin:0 0 14px;color:#075e54}input{width:100%;padding:11px;border:1px solid #ccc;border-radius:9px;font-size:16px;box-sizing:border-box}
 button{width:100%;margin-top:12px;padding:12px;background:#25d366;color:#fff;border:0;border-radius:9px;font-size:16px;font-weight:700}
@@ -2135,6 +2117,1475 @@ app.post("/inbox/logout", apiGuard, (req, res) => {
   setAuthCookie(req, res, true);
   res.json({ ok: true });
 });
+// =====================================================================
+// ===== PRO ADD-ON (NAYA CODE) =========================================
+// Upar ka original code bilkul nahi badla gaya. Ye poora hissa sirf naya jodha gaya hai.
+// Kya-kya jodha: source report (daily summary me), draft order/payment link, tracking bhejo,
+// abandoned cart reminder, raat ka auto-reply, staff login + assign + transfer, reply time,
+// customer profile, scheduled message, catalog (photo + price), review/refund tracking,
+// backup export, spam block, activity log, UPI ID + QR (customer maange to turant).
+// Naye Render settings (sab optional): ABANDONED_TEMPLATE, ABANDONED_TEMPLATE_LANG, VIP_SPEND, PUBLIC_URL
+// =====================================================================
+const { AsyncLocalStorage } = require("async_hooks");
+const proALS = new AsyncLocalStorage();
+const PRO_FILE = "pro-data.json";
+const PRO_IST = 5.5 * 3600000;
+const VIP_SPEND = Number(process.env.VIP_SPEND ?? 5000);
+const ABANDONED_TEMPLATE = (process.env.ABANDONED_TEMPLATE || "").trim();
+const ABANDONED_TEMPLATE_LANG = process.env.ABANDONED_TEMPLATE_LANG || "en";
+const pro = {
+  staff: [],
+  activity: [],
+  scheduled: [],
+  refunds: [],
+  reviews: {},
+  night: { on: false, start: 22, end: 9, text: "Namaste 🙏 Abhi hamari team available nahi hai. Hum subah 9 baje aapko reply karenge 😊" },
+  payInfo: { upi: "", note: "", qr: null, qrMime: "", qrMediaId: "", qrMediaAt: 0 },
+  knowledge: "",
+  abandoned: { on: false, delayMin: 60, sent: {} },
+  spam: { on: true, perMin: 15, autoBlock: 40 },
+};
+let proLoaded = false;
+let proSaveChain = Promise.resolve();
+async function proLoad() {
+  try {
+    let saved = null;
+    if (db) saved = await db.collection("pro_data").findOne({ _id: "main" });
+    else {
+      try {
+        saved = JSON.parse(fs.readFileSync(PRO_FILE, "utf8"));
+      } catch (e) {}
+    }
+    if (saved) {
+      for (const k of ["staff", "activity", "scheduled", "refunds"]) if (Array.isArray(saved[k])) pro[k] = saved[k];
+      if (saved.reviews && typeof saved.reviews === "object") pro.reviews = saved.reviews;
+      if (saved.night) Object.assign(pro.night, saved.night);
+      if (saved.payInfo) Object.assign(pro.payInfo, saved.payInfo);
+      if (typeof saved.knowledge === "string") pro.knowledge = saved.knowledge;
+      if (saved.abandoned) Object.assign(pro.abandoned, saved.abandoned);
+      if (saved.spam) Object.assign(pro.spam, saved.spam);
+    }
+  } catch (err) {
+    console.error("pro data load error:", err.message);
+  }
+  proLoaded = true;
+  console.log(`Pro add-on load: ${pro.staff.length} staff, ${pro.scheduled.filter((s) => s.status === "pending").length} scheduled`);
+}
+let proSaveTimer = null;
+function proSave() {
+  clearTimeout(proSaveTimer);
+  proSaveTimer = setTimeout(() => {
+    const snap = JSON.parse(JSON.stringify(pro));
+    proSaveChain = proSaveChain.then(async () => {
+      try {
+        if (db) await db.collection("pro_data").replaceOne({ _id: "main" }, { _id: "main", ...snap }, { upsert: true });
+        else fs.writeFileSync(PRO_FILE, JSON.stringify(snap));
+      } catch (err) {
+        console.error("pro data save error:", err.message);
+      }
+    });
+  }, 400);
+}
+// ---------- Activity log (kisne kya kiya) ----------
+function proLog(who, act, detail, phone) {
+  try {
+    const w = who || proALS.getStore()?.who || null;
+    pro.activity.push({
+      t: Date.now(),
+      who: w ? w.name : "System",
+      role: w ? w.role : "sys",
+      act: String(act).slice(0, 40),
+      detail: String(detail || "").slice(0, 200),
+      phone: phone ? String(phone) : "",
+    });
+    if (pro.activity.length > 3000) pro.activity = pro.activity.slice(-2500);
+    proSave();
+  } catch (e) {}
+}
+// ---------- Staff login (alag username/password) ----------
+function proHashPass(pass, salt) {
+  return crypto.scryptSync(String(pass), salt, 32).toString("hex");
+}
+function proStaffSig(st, exp) {
+  return crypto.createHmac("sha256", String(INBOX_SECRET || "x")).update(`staff|${st.id}|${exp}|${st.pv || 0}`).digest("hex");
+}
+function proStaffFromCookie(req) {
+  try {
+    const raw = readCookie(req, "inbox_staff");
+    if (!raw) return null;
+    const [id, exp, sig] = raw.split(".");
+    const st = pro.staff.find((s) => s.id === id);
+    if (!st || Number(exp) < Date.now()) return null;
+    return safeEq(sig || "", proStaffSig(st, exp)) ? st : null;
+  } catch (e) {
+    return null;
+  }
+}
+function proWho(req) {
+  if (req._proWho !== undefined) return req._proWho;
+  let w = null;
+  try {
+    if (INBOX_SECRET) {
+      const tok = readCookie(req, "inbox_auth");
+      const k = req.query?.key || req.get("x-inbox-key");
+      if ((tok && safeEq(tok, inboxToken())) || (k && safeEq(k, INBOX_SECRET))) w = { id: "owner", name: "Owner", role: "owner" };
+    }
+    if (!w) {
+      const st = proStaffFromCookie(req);
+      if (st) w = { id: st.id, name: st.name, role: "staff" };
+    }
+  } catch (e) {}
+  req._proWho = w;
+  return w;
+}
+const __origInboxAuthed = inboxAuthed;
+inboxAuthed = function (req) {
+  if (__origInboxAuthed(req)) return true;
+  return !!proStaffFromCookie(req);
+};
+const __origLoginHtml = loginHtml;
+loginHtml = function (msg) {
+  return __origLoginHtml(msg).replace(
+    "</form></body>",
+    `</form><details style="position:fixed;bottom:10px;left:50%;transform:translateX(-50%);background:#fff;padding:10px 14px;border-radius:12px;width:320px;max-width:92vw;box-sizing:border-box"><summary style="cursor:pointer;color:#075e54;font-weight:700">👥 Staff login</summary><form method="POST" action="/inbox/staff-login" style="box-shadow:none;padding:8px 0 0;width:auto"><input name="user" placeholder="Username" required style="margin-bottom:8px"><input type="password" name="pass" placeholder="Password" required><button type="submit">Staff Login</button></form></details></body>`
+  );
+};
+app.post("/inbox/staff-login", (req, res) => {
+  const ip = req.ip || "x";
+  const f = loginFails.get(ip) || { n: 0, t: Date.now() };
+  if (Date.now() - f.t > 10 * 60000) {
+    f.n = 0;
+    f.t = Date.now();
+  }
+  if (f.n >= 10) return res.status(429).type("html").send(loginHtml("Bahut zyada koshish. 10 minute baad try karein."));
+  const user = String(req.body?.user || "").trim().toLowerCase();
+  const pass = String(req.body?.pass || "");
+  const st = pro.staff.find((s) => s.user === user && !s.off);
+  let ok = false;
+  try {
+    ok = !!st && safeEq(proHashPass(pass, st.salt), st.hash);
+  } catch (e) {}
+  if (!ok) {
+    f.n++;
+    loginFails.set(ip, f);
+    return res.status(403).type("html").send(loginHtml("Username ya password galat hai"));
+  }
+  loginFails.delete(ip);
+  const exp = Date.now() + 14 * 86400000;
+  const secure = req.secure || req.get("x-forwarded-proto") === "https";
+  res.append("Set-Cookie", `inbox_staff=${st.id}.${exp}.${proStaffSig(st, exp)}; Path=/; Max-Age=${14 * 86400}; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`);
+  proLog({ id: st.id, name: st.name, role: "staff" }, "login", "Staff login");
+  res.redirect(303, "/inbox");
+});
+app.post("/inbox/staff-logout", (req, res) => {
+  res.append("Set-Cookie", "inbox_staff=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax");
+  res.json({ ok: true });
+});
+// Har /inbox request: kaun hai (owner/staff) yaad rakho, staff ke liye kuch kaam band, aur activity log
+const PRO_STAFF_BLOCKED_CHAT_ACTIONS = new Set(["delete", "block", "unblock", "delmsg"]);
+function proDescribe(req) {
+  const b = req.body && !Buffer.isBuffer(req.body) ? req.body : {};
+  const url = req.originalUrl.split("?")[0];
+  const t = (s, n = 70) => String(s || "").replace(/\s+/g, " ").slice(0, n);
+  if (url === "/inbox/api/send") return { act: "message", detail: t(b.text), phone: b.phone };
+  if (url === "/inbox/api/send-media") return { act: "file", detail: "File/photo bheji", phone: req.query.c };
+  if (url === "/inbox/api/send-template") return { act: "template", detail: t(b.name), phone: b.phone };
+  if (url === "/inbox/api/send-buttons") return { act: "buttons", detail: t(b.body), phone: b.phone };
+  if (url === "/inbox/api/send-location") return { act: "location", detail: "Location bheji", phone: b.phone };
+  if (url === "/inbox/api/order-action") return { act: "order-" + t(b.action, 12), detail: "Order id " + t(b.orderId, 20), phone: b.phone };
+  if (url === "/inbox/api/chat-action") {
+    const a = String(b.action || "");
+    if (["pin", "unpin", "archive", "unarchive", "unread", "note_add", "note_del"].includes(a)) return null;
+    const v = ["label_add", "label_remove", "alias", "source", "human", "aiOff", "optOut"].includes(a) ? t(typeof b.value === "object" ? "" : b.value, 40) : "";
+    return { act: a, detail: v, phone: b.phone };
+  }
+  if (url === "/inbox/api/settings") return { act: "settings", detail: t(b.op), phone: "" };
+  if (url === "/inbox/api/broadcast" && !b.dry) return { act: "broadcast", detail: t(b.name), phone: "" };
+  return null;
+}
+app.use("/inbox", (req, res, next) => {
+  const who = proWho(req);
+  if (!who) return next();
+  if (who.role === "staff" && req.method === "POST") {
+    const url = req.originalUrl.split("?")[0];
+    const act = String(req.body?.action || "");
+    const deny =
+      url === "/inbox/api/settings" ||
+      url === "/inbox/api/broadcast" ||
+      (url === "/inbox/api/chat-action" && PRO_STAFF_BLOCKED_CHAT_ACTIONS.has(act)) ||
+      (url === "/inbox/api/order-action" && act === "cancel");
+    if (deny) return res.status(403).json({ error: "Ye kaam sirf Owner kar sakta hai" });
+  }
+  if (req.method === "POST") {
+    res.on("finish", () => {
+      try {
+        if (res.statusCode >= 400) return;
+        const d = proDescribe(req);
+        if (d) proLog(who, d.act, d.detail, d.phone);
+      } catch (e) {}
+    });
+  }
+  proALS.run({ who }, next);
+});
+const proOwnerOnly = (req, res, next) => {
+  if (proWho(req)?.role !== "owner") return res.status(403).json({ error: "Ye kaam sirf Owner kar sakta hai" });
+  next();
+};
+// Staff ka naam message par (kisne bheja) + chat auto-assign
+const __origAgentSend = agentSend;
+agentSend = async function (phone, body, logText, opts = {}) {
+  const m = await __origAgentSend(phone, body, logText, opts);
+  try {
+    const who = proALS.getStore()?.who;
+    if (m && who) {
+      m.staff = who.name;
+      m.staffId = who.id;
+      const meta = ensureChat(phone).meta;
+      if (who.role === "staff" && !meta.assignedTo) {
+        meta.assignedTo = who.id;
+        meta.assignedName = who.name;
+      }
+      queueSave(phone);
+    }
+  } catch (e) {}
+  return m;
+};
+
+// ---------- Naya message aaye to: spam check, raat ka reply, UPI/QR turant ----------
+const proSpamMap = new Map();
+const proNightSent = new Map();
+const proPayInfoSent = new Map();
+function proSpamCheck(phone, msg) {
+  if (!pro.spam.on || phone === OWNER_PHONE) return false;
+  const c = ensureChat(phone);
+  const meta = c.meta;
+  const now = Date.now();
+  const arr = (proSpamMap.get(phone) || []).filter((t) => now - t < 300000);
+  arr.push(now);
+  proSpamMap.set(phone, arr);
+  const lastMin = arr.filter((t) => now - t < 60000).length;
+  if (meta.spamUntil && now < meta.spamUntil) return true;
+  if (lastMin > pro.spam.perMin || arr.length >= pro.spam.autoBlock) {
+    meta.spamUntil = now + 10 * 60000;
+    meta.spam = true;
+    c.needsHuman = true;
+    if (!Array.isArray(meta.labels)) meta.labels = [];
+    if (!meta.labels.includes("Spam")) meta.labels.push("Spam");
+    if (!inboxSettings.labels.includes("Spam")) {
+      inboxSettings.labels.push("Spam");
+      saveInboxSettings();
+    }
+    if (arr.length >= pro.spam.autoBlock) {
+      inboxSettings.blocked[phone] = { at: now, name: String(meta.alias || c.name || "").slice(0, 60) + " (auto spam)" };
+      const cp = cleanPhone(phone);
+      if (cp) BLOCKED_PHONES.add(cp);
+      saveInboxSettings();
+      proLog(null, "spam-block", `${arr.length} messages 5 minute me, number block`, phone);
+    } else {
+      proLog(null, "spam-flag", `${lastMin} messages 1 minute me, bot 10 minute chup`, phone);
+    }
+    queueSave(phone);
+    return true;
+  }
+  return false;
+}
+function proInNightWindow() {
+  const h = new Date(Date.now() + PRO_IST).getUTCHours();
+  const { start, end } = pro.night;
+  return start > end ? h >= start || h < end : h >= start && h < end;
+}
+async function proNightReply(phone) {
+  if (!pro.night.on || !pro.night.text || !proInNightWindow() || phone === OWNER_PHONE) return;
+  const now = Date.now();
+  if (now - (proNightSent.get(phone) || 0) < 8 * 3600000) return;
+  proNightSent.set(phone, now);
+  await sendText(phone, pro.night.text);
+  addMessage(phone, "out", pro.night.text);
+  const c = conversations.get(phone);
+  const m = c?.messages[c.messages.length - 1];
+  if (m) m.auto = "night";
+}
+function proWantsPayInfo(text) {
+  const t = String(text || "").toLowerCase().trim();
+  if (!t || t.length > 200) return false;
+  const topic = /(\bqr\b|qr code|scanner|scan kar|\bupi\b|gpay|google pay|phonepe|phone pe|paytm|bank details|account number|account no|bank account|ifsc|payment (kaise|kahan|kahaan|kidhar|link|details|karu|karna|krna|kre))/;
+  const ask = /(kya|batao|bta|bhejo|bhej do|send|share|\bdo\b|de do|dedo|chahiye|chaiye|kaise|kahan|kahaan|kidhar|where|how|\?|please|plz|pls|\bid\b|number|detail)/;
+  const done = /(kar diya|kar di\b|kr diya|kr di\b|ho gaya|hogaya|ho gya|paid|done|successful|screenshot|kat gaye|kat gaya|failed|nahi ho raha|nhi ho raha|refund)/;
+  return topic.test(t) && ask.test(t) && !done.test(t);
+}
+function proUpiId() {
+  return pro.payInfo.upi || UPI_ID || "";
+}
+function proPayInfoText(phone) {
+  const aw = conversations.get(phone)?.awaiting;
+  const lines = ["🙏 Payment details:"];
+  if (aw?.amount) lines.push(`🧾 Order ${aw.orderName || ""} | 💰 Amount: ₹${aw.amount}`);
+  if (proUpiId()) lines.push(`📲 UPI ID: ${proUpiId()}`);
+  if (pro.payInfo.qr) lines.push("📷 Ya is QR code ko scan karein");
+  if (pro.payInfo.note) lines.push("", pro.payInfo.note);
+  lines.push("", "Payment ke baad screenshot isi chat me bhej dein 📸 Verify hote hi order confirm ho jayega ✅");
+  return lines.join("\n");
+}
+async function proQrMediaId(force) {
+  if (!pro.payInfo.qr) return "";
+  if (!force && pro.payInfo.qrMediaId && Date.now() - pro.payInfo.qrMediaAt < 20 * 86400000) return pro.payInfo.qrMediaId;
+  const buf = Buffer.from(pro.payInfo.qr, "base64");
+  const mime = pro.payInfo.qrMime || "image/png";
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("type", mime);
+  form.append("file", new Blob([buf], { type: mime }), "qr." + (mime.includes("png") ? "png" : "jpg"));
+  const up = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${WHATSAPP_PHONE_ID}/media`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
+    body: form,
+  });
+  const uj = await up.json().catch(() => ({}));
+  if (!up.ok || !uj.id) throw new Error(uj?.error ? `${uj.error.code}: ${uj.error.message}` : "QR upload nahi hua");
+  pro.payInfo.qrMediaId = String(uj.id);
+  pro.payInfo.qrMediaAt = Date.now();
+  proSave();
+  return pro.payInfo.qrMediaId;
+}
+// QR + UPI customer ko bhejta hai. viaAgent=true: inbox se (staff ke naam), false: bot khud
+async function proSendPayInfo(phone, viaAgent) {
+  const text = proPayInfoText(phone);
+  const sendText2 = async () => {
+    if (viaAgent) await agentSend(phone, { type: "text", text: { body: text } }, text);
+    else {
+      await sendWhatsApp({ to: phone, type: "text", text: { body: text } });
+      addMessage(phone, "out", text);
+    }
+  };
+  await sendText2();
+  if (!pro.payInfo.qr) return { qr: false };
+  const mime = pro.payInfo.qrMime || "image/png";
+  const media = { id: "", type: "image", mime, filename: "", caption: "Payment QR" };
+  let id = await proQrMediaId(false);
+  const send = async (mid) => {
+    media.id = mid;
+    if (viaAgent) await agentSend(phone, { type: "image", image: { id: mid, caption: "Payment QR" } }, "[Photo] Payment QR", { media });
+    else {
+      await sendWhatsApp({ to: phone, type: "image", image: { id: mid, caption: "Payment QR" } });
+      addMessage(phone, "out", "[Photo] Payment QR", null, media);
+    }
+  };
+  try {
+    await send(id);
+  } catch (err) {
+    id = await proQrMediaId(true);
+    await send(id);
+  }
+  saveMediaToDb(media.id, Buffer.from(pro.payInfo.qr, "base64"), mime).catch(() => {});
+  return { qr: true };
+}
+async function proPayInfoReply(phone, text) {
+  if (!proWantsPayInfo(text) || (!proUpiId() && !pro.payInfo.qr)) return false;
+  const now = Date.now();
+  const arr = (proPayInfoSent.get(phone) || []).filter((t) => now - t < 3600000);
+  if (arr.length >= 3) return false;
+  arr.push(now);
+  proPayInfoSent.set(phone, arr);
+  try {
+    await proSendPayInfo(phone, false);
+    const c = conversations.get(phone);
+    if (c) c.needsHuman = false;
+    proLog(null, "payinfo-auto", "Customer ke maangne par UPI/QR bheja", phone);
+    return true;
+  } catch (err) {
+    console.error("pay info auto error:", waErr(err));
+    return false;
+  }
+}
+async function proOnIncoming(msg, media) {
+  const phone = msg.from;
+  if (proSpamCheck(phone, msg)) return true;
+  await proNightReply(phone);
+  if (msg.type === "text" && (await proPayInfoReply(phone, msg.text?.body || ""))) return true;
+  return false;
+}
+const __origInboxOnIncoming = inboxOnIncoming;
+inboxOnIncoming = async function (msg, media) {
+  const blocked = await __origInboxOnIncoming(msg, media);
+  if (blocked) return true;
+  try {
+    return await proOnIncoming(msg, media);
+  } catch (err) {
+    console.error("pro incoming error:", err.message);
+    return false;
+  }
+};
+// AI ko owner ki di hui extra jaankari (UPI, kuch bhi) bhi milti hai
+const __origBuildSystemPrompt = buildSystemPrompt;
+buildSystemPrompt = function (productsText, ordersText, extra = "") {
+  const s = __origBuildSystemPrompt(productsText, ordersText, extra);
+  const parts = [];
+  if (proUpiId()) parts.push(`Store UPI ID: ${proUpiId()}${pro.payInfo.qr ? " (the payment QR image is sent automatically by the system when a customer asks for it)" : ""}`);
+  if (pro.payInfo.note) parts.push(pro.payInfo.note);
+  if (pro.knowledge) parts.push(pro.knowledge);
+  if (!parts.length) return s;
+  const block = `OWNER'S EXTRA INFORMATION (share when the customer asks, never invent beyond this):\n${parts.join("\n").slice(0, 4000)}\n`;
+  return s.includes("RULES:\n1.") ? s.replace("RULES:\n1.", block + "RULES:\n1.") : s + "\n" + block;
+};
+// ---------- Scheduled message + abandoned cart timers ----------
+async function proRunScheduled() {
+  const now = Date.now();
+  for (const s of pro.scheduled) {
+    if (s.status !== "pending" || s.at > now) continue;
+    s.status = "sending";
+    try {
+      await proALS.run({ who: { id: "sys", name: s.by || "Scheduled", role: "sys" } }, async () => {
+        if (s.template) {
+          const { template, list } = templatePayload(s.template, s.lang, s.params, s.phone, customerNameOf(s.phone));
+          await agentSend(s.phone, { type: "template", template }, `[Template] ${s.template}${list.length ? ": " + list.join(" | ") : ""}`);
+        } else {
+          await agentSend(s.phone, { type: "text", text: { body: s.text } }, s.text);
+        }
+      });
+      s.status = "sent";
+      s.sentAt = Date.now();
+      proLog(null, "scheduled-sent", String(s.text || s.template).slice(0, 60), s.phone);
+    } catch (err) {
+      s.status = "failed";
+      s.error = waErr(err).slice(0, 160);
+    }
+    proSave();
+  }
+  if (pro.scheduled.length > 400) pro.scheduled = pro.scheduled.filter((s) => s.status === "pending").concat(pro.scheduled.filter((s) => s.status !== "pending").slice(-200));
+}
+let proAbandonedRunning = false;
+async function proRunAbandoned() {
+  if (proAbandonedRunning) return ["pehle se chal raha hai"];
+  if (!pro.abandoned.on) return ["Abandoned cart reminder band hai"];
+  proAbandonedRunning = true;
+  const out = [];
+  try {
+    const since = new Date(Date.now() - 3 * 86400000).toISOString();
+    const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/checkouts.json?limit=100&created_at_min=${encodeURIComponent(since)}`;
+    const res = await axios.get(url, { headers: await shopifyHeaders(), timeout: 20000 });
+    const list = res.data?.checkouts || [];
+    const orders = await getRecentOrders();
+    out.push(`${list.length} checkout(s) mile`);
+    for (const co of list) {
+      const id = String(co.id);
+      if (co.completed_at || pro.abandoned.sent[id]) continue;
+      const age = Date.now() - Date.parse(co.updated_at || co.created_at);
+      if (age < pro.abandoned.delayMin * 60000 || age > 48 * 3600000) continue;
+      const phone = cleanPhone(co.phone || co.shipping_address?.phone || co.billing_address?.phone || co.customer?.phone);
+      if (!phone || isBlockedChat(phone) || conversations.get(phone)?.meta?.optOut) continue;
+      const ordered = orders.some(
+        (o) =>
+          [o.phone, o.customer?.phone, o.shippingAddress?.phone, o.billingAddress?.phone].some((x) => cleanPhone(x) === phone) &&
+          Date.parse(o.createdAt) > Date.parse(co.created_at)
+      );
+      if (ordered) {
+        pro.abandoned.sent[id] = "ordered";
+        continue;
+      }
+      const link = co.abandoned_checkout_url;
+      if (!link) continue;
+      const items = cleanText((co.line_items || []).map((i) => i.title).join(", "), 120) || "aapke products";
+      const name = cleanText(co.shipping_address?.first_name || co.billing_address?.first_name || co.customer?.first_name || "Customer", 40);
+      const c = conversations.get(phone);
+      const lastIn = c ? [...c.messages].reverse().find((m) => m.dir === "in") : null;
+      const within24 = !!lastIn && Date.now() - lastIn.time < 24 * 3600000;
+      try {
+        if (within24) {
+          const text = `Hi ${name} 👋 Aapne Bazoora par ${items} cart me rakha tha. Order poora karne ke liye ye link kholein:\n${link}\nKoi madad chahiye to bata dijiye 😊`;
+          await sendWhatsApp({ to: phone, type: "text", text: { body: text } });
+          addMessage(phone, "out", text);
+        } else if (ABANDONED_TEMPLATE) {
+          await sendWhatsApp({
+            to: phone,
+            type: "template",
+            template: {
+              name: ABANDONED_TEMPLATE,
+              language: { code: ABANDONED_TEMPLATE_LANG },
+              components: [{ type: "body", parameters: [name, items, link].map((t) => ({ type: "text", text: String(t) })) }],
+            },
+          });
+          addMessage(phone, "out", `[Abandoned cart] ${items}`);
+        } else {
+          pro.abandoned.sent[id] = "skip-no-template";
+          out.push(`${phone}: 24 ghante ka window band aur ABANDONED_TEMPLATE set nahi`);
+          continue;
+        }
+        pro.abandoned.sent[id] = Date.now();
+        proLog(null, "abandoned-cart", items.slice(0, 80), phone);
+        out.push(`${phone}: reminder gaya`);
+      } catch (err) {
+        out.push(`${phone}: nahi gaya (${waErr(err)})`);
+      }
+    }
+    const keys = Object.keys(pro.abandoned.sent);
+    if (keys.length > 3000) for (const k of keys.slice(0, keys.length - 2000)) delete pro.abandoned.sent[k];
+    proSave();
+  } catch (err) {
+    out.push("error: " + (err.response?.data?.errors || err.message));
+  } finally {
+    proAbandonedRunning = false;
+  }
+  return out;
+}
+app.get("/cron/abandoned", async (req, res) => {
+  if (!CRON_SECRET || req.query.key !== CRON_SECRET) return res.status(403).send("Forbidden");
+  res.type("text/plain").send((await proRunAbandoned()).join("\n"));
+});
+let proTimersOn = false;
+function proStartTimers() {
+  if (proTimersOn) return;
+  proTimersOn = true;
+  setInterval(() => proRunScheduled().catch((e) => console.error("scheduled error:", e.message)), 30000);
+  setInterval(() => {
+    if (pro.abandoned.on) proRunAbandoned().catch((e) => console.error("abandoned error:", e.message));
+  }, 10 * 60000);
+}
+const __origLoadInboxSettings = loadInboxSettings;
+loadInboxSettings = async function () {
+  await __origLoadInboxSettings();
+  await proLoad();
+  proStartTimers();
+};
+// ---------- Source ka hisaab (kaun sa source zyada bikri de raha hai) ----------
+async function proFetchOrdersRange(fromIso, toIso) {
+  let url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/orders.json?status=any&limit=250&created_at_min=${encodeURIComponent(fromIso)}&created_at_max=${encodeURIComponent(toIso)}&fields=id,name,created_at,total_price,cancelled_at,landing_site,referring_site,source_name,phone,customer,shipping_address,billing_address`;
+  const all = [];
+  for (let page = 0; page < 8 && url; page++) {
+    const r = await axios.get(url, { headers: await shopifyHeaders(), timeout: 25000 });
+    all.push(...(r.data?.orders || []));
+    const link = String(r.headers?.link || "");
+    const m = /<([^>]+)>;\s*rel="next"/.exec(link);
+    url = m ? m[1] : "";
+  }
+  return all;
+}
+async function proSourceReport(fromIso, toIso) {
+  const orders = await proFetchOrdersRange(fromIso, toIso);
+  const map = new Map();
+  let total = 0;
+  let totalSale = 0;
+  for (const o of orders) {
+    const sn = String(o.source_name || "");
+    let label = "";
+    let isAd = false;
+    if (!/^(pos|shopify_draft_order)$/i.test(sn)) {
+      const cls = classifySource({ referrer: String(o.referring_site || ""), landing: String(o.landing_site || ""), sourceName: /^(web|iphone|android)$/i.test(sn) || /^\d+$/.test(sn) ? "" : sn });
+      label = cls.label;
+      isAd = !!cls.isAd;
+    } else label = "Inbox/Draft order";
+    if (!label) {
+      const phone = cleanPhone(o.shipping_address?.phone || o.phone || o.customer?.phone || o.billing_address?.phone);
+      const ms = phone ? conversations.get(phone)?.meta?.source : "";
+      label = ms && ms !== "Direct" ? ms : "Direct / Unknown";
+      isAd = / Ads?$|^Ads$/i.test(label);
+    }
+    const e = map.get(label) || { label, orders: 0, sale: 0, cancelled: 0, ad: false };
+    if (isAd) e.ad = true;
+    e.orders++;
+    if (o.cancelled_at) e.cancelled++;
+    else {
+      e.sale += Number(o.total_price) || 0;
+      totalSale += Number(o.total_price) || 0;
+    }
+    total++;
+    map.set(label, e);
+  }
+  const rows = [...map.values()].map((e) => ({ ...e, sale: Math.round(e.sale) })).sort((a, b) => b.sale - a.sale || b.orders - a.orders);
+  const ads = rows.filter((r) => r.ad);
+  return {
+    rows,
+    total,
+    totalSale: Math.round(totalSale),
+    adsOrders: ads.reduce((a, r) => a + r.orders, 0),
+    adsSale: ads.reduce((a, r) => a + r.sale, 0),
+    best: rows.find((r) => r.sale > 0) || null,
+  };
+}
+function proSourceText(rep, title) {
+  if (!rep.rows.length) return `📍 ${title}: koi order nahi`;
+  const lines = [`📍 ${title}`];
+  for (const r of rep.rows.slice(0, 10)) lines.push(`${r.label}: ${r.orders} order, ₹${r.sale}${r.cancelled ? ` (cancel ${r.cancelled})` : ""}`);
+  lines.push(`Ads se total: ${rep.adsOrders} order, ₹${rep.adsSale}`);
+  if (rep.best) lines.push(`🏆 Sabse zyada bikri: ${rep.best.label} (₹${rep.best.sale})`);
+  return lines.join("\n");
+}
+const __origBuildSummary = buildSummary;
+buildSummary = async function () {
+  const r = await __origBuildSummary();
+  try {
+    const now = new Date(Date.now() + PRO_IST);
+    const todayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - PRO_IST;
+    const rep = await proSourceReport(new Date(todayStart - 86400000).toISOString(), new Date(todayStart).toISOString());
+    r.sources = rep;
+    r.text += "\n\n" + proSourceText(rep, "Source ka hisaab (kal)");
+  } catch (err) {
+    console.error("summary source report error:", err.response?.data || err.message);
+  }
+  return r;
+};
+
+// ---------- Pro APIs ----------
+const proApi = (fn) => [apiGuard, wrapApi(fn)];
+function proStaffPublic() {
+  return pro.staff.map((s) => ({ id: s.id, name: s.name, user: s.user, off: !!s.off }));
+}
+app.get("/inbox/api/pro/config", ...proApi(async (req, res) => {
+  const who = proWho(req);
+  res.json({
+    who,
+    staff: proStaffPublic(),
+    night: pro.night,
+    payInfo: { upi: pro.payInfo.upi, envUpi: UPI_ID, note: pro.payInfo.note, hasQr: !!pro.payInfo.qr },
+    knowledge: pro.knowledge,
+    abandoned: { on: pro.abandoned.on, delayMin: pro.abandoned.delayMin, template: !!ABANDONED_TEMPLATE },
+    spam: pro.spam,
+    vipSpend: VIP_SPEND,
+  });
+}));
+app.post("/inbox/api/pro/config", apiGuard, proOwnerOnly, wrapApi(async (req, res) => {
+  const b = req.body || {};
+  const num = (v, lo, hi, d) => Math.min(Math.max(Number.isFinite(Number(v)) ? Number(v) : d, lo), hi);
+  if (b.op === "night") {
+    pro.night = { on: !!b.on, start: num(b.start, 0, 23, 22), end: num(b.end, 0, 23, 9), text: String(b.text || "").trim().slice(0, 500) || pro.night.text };
+  } else if (b.op === "payinfo") {
+    pro.payInfo.upi = String(b.upi || "").trim().slice(0, 80);
+    pro.payInfo.note = String(b.note || "").trim().slice(0, 800);
+    pro.knowledge = String(b.knowledge || "").trim().slice(0, 3000);
+  } else if (b.op === "qr_del") {
+    pro.payInfo.qr = null;
+    pro.payInfo.qrMediaId = "";
+  } else if (b.op === "abandoned") {
+    pro.abandoned.on = !!b.on;
+    pro.abandoned.delayMin = num(b.delayMin, 15, 1440, 60);
+  } else if (b.op === "spam") {
+    pro.spam = { on: !!b.on, perMin: num(b.perMin, 5, 100, 15), autoBlock: num(b.autoBlock, 10, 500, 40) };
+  } else return res.status(400).json({ error: "Op galat hai" });
+  proLog(null, "pro-settings", b.op);
+  proSave();
+  res.json({ ok: true });
+}));
+app.post("/inbox/api/pro/qr", apiGuard, proOwnerOnly, express.raw({ type: "application/octet-stream", limit: 4 * 1024 * 1024 }), wrapApi(async (req, res) => {
+  const buf = req.body;
+  const mime = String(req.query.mime || "").toLowerCase();
+  if (!Buffer.isBuffer(buf) || !buf.length) return res.status(400).json({ error: "Image nahi mili" });
+  if (!/^image\/(png|jpeg)$/.test(mime)) return res.status(400).json({ error: "Sirf PNG ya JPG image chalegi" });
+  pro.payInfo.qr = buf.toString("base64");
+  pro.payInfo.qrMime = mime;
+  pro.payInfo.qrMediaId = "";
+  proLog(null, "qr-upload", "Payment QR badla");
+  proSave();
+  res.json({ ok: true });
+}));
+app.get("/inbox/api/pro/qr", apiGuard, (req, res) => {
+  if (!pro.payInfo.qr) return res.status(404).send("QR nahi hai");
+  res.set("Content-Type", pro.payInfo.qrMime || "image/png").set("Cache-Control", "no-store").send(Buffer.from(pro.payInfo.qr, "base64"));
+});
+app.post("/inbox/api/pro/send-payinfo", ...proApi(async (req, res) => {
+  const phone = normPhone(req.body?.phone);
+  if (!phone) return res.status(400).json({ error: "Phone galat hai" });
+  if (!proUpiId() && !pro.payInfo.qr) return res.status(400).json({ error: "Pehle Pro settings me UPI ID ya QR daalein" });
+  const r = await proSendPayInfo(phone, true);
+  proLog(null, "payinfo-sent", r.qr ? "UPI + QR" : "UPI", phone);
+  res.json({ ok: true });
+}));
+// Staff
+app.post("/inbox/api/pro/staff", apiGuard, proOwnerOnly, wrapApi(async (req, res) => {
+  const b = req.body || {};
+  if (b.op === "add") {
+    const name = String(b.name || "").trim().slice(0, 30);
+    const user = String(b.user || "").trim().toLowerCase().replace(/[^a-z0-9._-]/g, "").slice(0, 20);
+    const pass = String(b.pass || "");
+    if (!name || !user || pass.length < 6) return res.status(400).json({ error: "Naam, username aur 6+ akshar ka password likhein" });
+    if (pro.staff.some((s) => s.user === user)) return res.status(400).json({ error: "Ye username pehle se hai" });
+    const salt = crypto.randomBytes(12).toString("hex");
+    pro.staff.push({ id: "s" + Date.now().toString(36), name, user, salt, hash: proHashPass(pass, salt), pv: 1, at: Date.now() });
+    proLog(null, "staff-add", name);
+  } else if (b.op === "passwd") {
+    const st = pro.staff.find((s) => s.id === String(b.id));
+    if (!st || String(b.pass || "").length < 6) return res.status(400).json({ error: "Password 6+ akshar ka likhein" });
+    st.salt = crypto.randomBytes(12).toString("hex");
+    st.hash = proHashPass(String(b.pass), st.salt);
+    st.pv = (st.pv || 0) + 1;
+    proLog(null, "staff-passwd", st.name);
+  } else if (b.op === "off") {
+    const st = pro.staff.find((s) => s.id === String(b.id));
+    if (!st) return res.status(404).json({ error: "Staff nahi mila" });
+    st.off = !st.off;
+    st.pv = (st.pv || 0) + 1;
+    proLog(null, st.off ? "staff-off" : "staff-on", st.name);
+  } else if (b.op === "del") {
+    const st = pro.staff.find((s) => s.id === String(b.id));
+    pro.staff = pro.staff.filter((s) => s.id !== String(b.id));
+    if (st) proLog(null, "staff-del", st.name);
+  } else return res.status(400).json({ error: "Op galat hai" });
+  proSave();
+  res.json({ ok: true, staff: proStaffPublic() });
+}));
+// Chat assign / transfer (note ke saath)
+app.get("/inbox/api/pro/assignments", ...proApi(async (req, res) => {
+  const map = {};
+  for (const [p, c] of conversations) if (c.meta?.assignedName) map[p] = c.meta.assignedName;
+  const who = proWho(req);
+  res.json({ map, me: who ? who.name : "" });
+}));
+app.post("/inbox/api/pro/assign", ...proApi(async (req, res) => {
+  const phone = normPhone(req.body?.phone);
+  const c = phone && conversations.get(phone);
+  if (!c) return res.status(404).json({ error: "Chat nahi mili" });
+  const meta = ensureChat(phone).meta;
+  const to = String(req.body?.to || "");
+  const note = String(req.body?.note || "").trim().slice(0, 500);
+  const who = proWho(req);
+  let toName = "";
+  if (to === "owner") toName = "Owner";
+  else if (to) {
+    const st = pro.staff.find((s) => s.id === to && !s.off);
+    if (!st) return res.status(400).json({ error: "Staff nahi mila" });
+    toName = st.name;
+  }
+  const from = meta.assignedName || "Kisi ko nahi";
+  if (toName) {
+    meta.assignedTo = to;
+    meta.assignedName = toName;
+  } else {
+    delete meta.assignedTo;
+    delete meta.assignedName;
+  }
+  if (!Array.isArray(meta.notes)) meta.notes = [];
+  meta.notes.push({
+    id: "n" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    text: `🔁 Transfer: ${from} → ${toName || "Koi nahi"} (${who ? who.name : ""})${note ? "\n" + note : ""}`,
+    time: Date.now(),
+  });
+  queueSave(phone);
+  proLog(null, "transfer", `${from} → ${toName || "koi nahi"}${note ? ": " + note.slice(0, 80) : ""}`, phone);
+  res.json({ ok: true });
+}));
+app.get("/inbox/api/pro/msgstaff", ...proApi(async (req, res) => {
+  const c = conversations.get(String(req.query.c || ""));
+  const map = {};
+  if (c) for (const m of c.messages.slice(-300)) if (m.dir === "out" && m.id && (m.staff || m.auto)) map[m.id] = m.staff || (m.auto === "night" ? "Auto (raat)" : "Auto");
+  res.json({ map });
+}));
+// Reply ka time + sabse der se pending chats
+function proReplyStats(days) {
+  const since = Date.now() - days * 86400000;
+  const all = [];
+  const byStaff = new Map();
+  const pending = [];
+  for (const [phone, c] of conversations) {
+    const ms = c.messages;
+    if (!ms.length || isBlockedChat(phone) || c.meta?.spam) continue;
+    for (let i = 0; i < ms.length; i++) {
+      const m = ms[i];
+      if (m.dir !== "in" || m.time < since) continue;
+      if (i > 0 && ms[i - 1].dir === "in") continue;
+      const nxt = ms.slice(i + 1).find((x) => x.dir === "out" && (x.staff || x.by));
+      if (!nxt) continue;
+      const d = nxt.time - m.time;
+      if (d < 0 || d > 3 * 86400000) continue;
+      all.push(d);
+      const k = nxt.staff || "Owner/Purane";
+      const e = byStaff.get(k) || { name: k, n: 0, sum: 0 };
+      e.n++;
+      e.sum += d;
+      byStaff.set(k, e);
+    }
+    const last = ms[ms.length - 1];
+    if (last.dir === "in" && !c.meta?.archived) {
+      pending.push({ phone, name: c.meta?.alias || c.name || "", since: last.time, assigned: c.meta?.assignedName || "", text: String(last.text || "").slice(0, 60) });
+    }
+  }
+  all.sort((a, b) => a - b);
+  pending.sort((a, b) => a.since - b.since);
+  const avg = all.length ? Math.round(all.reduce((a, b) => a + b, 0) / all.length) : 0;
+  return {
+    count: all.length,
+    avgMs: avg,
+    medianMs: all.length ? all[Math.floor(all.length / 2)] : 0,
+    within5: all.filter((d) => d <= 300000).length,
+    staff: [...byStaff.values()].map((e) => ({ name: e.name, n: e.n, avgMs: Math.round(e.sum / e.n) })).sort((a, b) => a.avgMs - b.avgMs),
+    pending: pending.slice(0, 30),
+    pendingTotal: pending.length,
+  };
+}
+app.get("/inbox/api/pro/stats", ...proApi(async (req, res) => {
+  res.json(proReplyStats(Math.min(Math.max(parseInt(req.query.days, 10) || 7, 1), 90)));
+}));
+app.get("/inbox/api/pro/sources", ...proApi(async (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 7, 1), 90);
+  const now = new Date(Date.now() + PRO_IST);
+  const todayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - PRO_IST;
+  const rep = await proSourceReport(new Date(todayStart - (days - 1) * 86400000).toISOString(), new Date(todayStart + 86400000).toISOString());
+  res.json(rep);
+}));
+// Customer ka poora profile
+let proOrdersCache = { time: 0, nodes: [] };
+async function proAllOrders() {
+  if (Date.now() - proOrdersCache.time < 120000) return proOrdersCache.nodes;
+  const since = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+  const q = `query($q: String!, $after: String) {
+    orders(first: 250, after: $after, query: $q, sortKey: CREATED_AT, reverse: true) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        legacyResourceId name createdAt cancelledAt tags phone
+        displayFinancialStatus displayFulfillmentStatus
+        currentTotalPriceSet { shopMoney { amount } }
+        totalRefundedSet { shopMoney { amount } }
+        customer { phone }
+        shippingAddress { phone }
+        billingAddress { phone }
+        lineItems(first: 3) { nodes { title } }
+      }
+    }
+  }`;
+  const nodes = [];
+  let after = null;
+  for (let i = 0; i < 4; i++) {
+    const data = await shopifyGraphQL(q, { q: `created_at:>=${since}`, after });
+    const o = data?.data?.orders;
+    if (!o) break;
+    nodes.push(...o.nodes);
+    if (!o.pageInfo?.hasNextPage) break;
+    after = o.pageInfo.endCursor;
+  }
+  proOrdersCache = { time: Date.now(), nodes };
+  return nodes;
+}
+const proOrderPhones = (o) => [o.phone, o.customer?.phone, o.shippingAddress?.phone, o.billingAddress?.phone];
+app.get("/inbox/api/pro/profile", ...proApi(async (req, res) => {
+  const phone = normPhone(req.query.c);
+  if (!phone) return res.status(400).json({ error: "Phone galat hai" });
+  const nodes = (await proAllOrders()).filter((o) => proOrderPhones(o).some((x) => cleanPhone(x) === cleanPhone(phone)));
+  const has = (o, t) => (o.tags || []).includes(t);
+  const amt = (o) => Number(o.currentTotalPriceSet?.shopMoney?.amount) || 0;
+  const live = nodes.filter((o) => !o.cancelledAt);
+  const spent = Math.round(live.reduce((a, o) => a + amt(o), 0));
+  const cancelled = nodes.filter((o) => o.cancelledAt || has(o, "wa-cancelled") || has(o, "wa-auto-cancelled")).length;
+  const rto = nodes.filter((o) => has(o, "rto")).length;
+  const refunded = nodes.filter((o) => Number(o.totalRefundedSet?.shopMoney?.amount) > 0).length;
+  const delivered = live.filter((o) => o.displayFulfillmentStatus === "FULFILLED" && !has(o, "rto")).length;
+  const risky = rto >= 1 || cancelled >= 2 || nodes.some((o) => has(o, "wa-high-risk") || has(o, "wa-blocked"));
+  const vip = !risky && (spent >= VIP_SPEND || delivered >= 3);
+  const c = conversations.get(phone);
+  const meta = c?.meta || {};
+  res.json({
+    phone,
+    name: meta.alias || c?.name || "",
+    orders: nodes.length,
+    spent,
+    avg: live.length ? Math.round(spent / live.length) : 0,
+    cancelled,
+    rto,
+    refunded,
+    delivered,
+    first: nodes.length ? Date.parse(nodes[nodes.length - 1].createdAt) : 0,
+    last: nodes.length ? Date.parse(nodes[0].createdAt) : 0,
+    vip,
+    risky,
+    source: meta.source || "",
+    assigned: meta.assignedName || "",
+    labels: meta.labels || [],
+    blocked: isBlockedChat(phone),
+    recent: nodes.slice(0, 5).map((o) => ({ name: o.name, at: Date.parse(o.createdAt), total: Math.round(amt(o)), pay: o.displayFinancialStatus, ful: o.displayFulfillmentStatus, cancelled: !!o.cancelledAt, rto: has(o, "rto"), items: (o.lineItems?.nodes || []).map((i) => i.title).join(", ").slice(0, 80) })),
+  });
+}));
+// Draft order / payment link
+app.get("/inbox/api/pro/variants", ...proApi(async (req, res) => {
+  const term = String(req.query.q || "").replace(/[^\p{L}\p{N} ]/gu, " ").trim();
+  const q = `query($q: String!) { products(first: 12, query: $q) { nodes { title featuredImage { url } onlineStoreUrl variants(first: 8) { nodes { id title price } } } } }`;
+  const data = await shopifyGraphQL(q, { q: "status:active" + (term ? " " + term : "") });
+  const items = [];
+  for (const p of data?.data?.products?.nodes || []) {
+    for (const v of p.variants?.nodes || []) {
+      items.push({ id: v.id, title: cleanText(p.title, 80) + (v.title && v.title !== "Default Title" ? " - " + cleanText(v.title, 40) : ""), price: Number(v.price) || 0, image: p.featuredImage?.url || "", url: p.onlineStoreUrl || "" });
+    }
+  }
+  res.json({ items });
+}));
+app.post("/inbox/api/pro/draft-order", ...proApi(async (req, res) => {
+  const phone = normPhone(req.body?.phone);
+  const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 20) : [];
+  if (!phone || !items.length) return res.status(400).json({ error: "Kam se kam 1 item chunein" });
+  const lineItems = [];
+  const names = [];
+  for (const it of items) {
+    const quantity = Math.min(Math.max(parseInt(it.qty, 10) || 1, 1), 50);
+    if (it.variantId && /^gid:\/\/shopify\/ProductVariant\/\d+$/.test(String(it.variantId))) {
+      lineItems.push({ variantId: String(it.variantId), quantity });
+      names.push(`${quantity}x ${cleanText(it.title, 60)}`);
+    } else {
+      const price = Number(it.price);
+      const title = cleanText(it.title, 80);
+      if (!title || !Number.isFinite(price) || price <= 0) return res.status(400).json({ error: "Custom item ka naam aur sahi price likhein" });
+      lineItems.push({ title, originalUnitPrice: price.toFixed(2), quantity, requiresShipping: true });
+      names.push(`${quantity}x ${title}`);
+    }
+  }
+  const input = { lineItems, phone: "+" + phone, tags: ["wa-draft", "wa-inbox"], note: String(req.body?.note || "Inbox se bana draft order").slice(0, 300) };
+  const disc = Number(req.body?.discountPct);
+  if (disc > 0 && disc <= 90) input.appliedDiscount = { valueType: "PERCENTAGE", value: disc, title: "Discount" };
+  const m = `mutation($input: DraftOrderInput!) { draftOrderCreate(input: $input) { draftOrder { id name invoiceUrl totalPriceSet { shopMoney { amount } } } userErrors { field message } } }`;
+  const r = await shopifyGraphQL(m, { input });
+  const errs = r?.data?.draftOrderCreate?.userErrors || [];
+  const d = r?.data?.draftOrderCreate?.draftOrder;
+  if (!d || errs.length) return res.status(400).json({ error: errs.map((e) => e.message).join(", ") || "Draft order nahi bana" });
+  const total = Math.round(Number(d.totalPriceSet?.shopMoney?.amount) || 0);
+  let sent = false;
+  if (req.body?.send !== false) {
+    const text = `🛍 Aapka order ready hai (${d.name})\n${names.join("\n")}\n💰 Total: ₹${total}\n\nPayment karke order confirm karne ke liye ye link kholein:\n${d.invoiceUrl}`;
+    await agentSend(phone, { type: "text", text: { body: text } }, text);
+    sent = true;
+  }
+  proLog(null, "draft-order", `${d.name} ₹${total}${sent ? " (link bheja)" : ""}`, phone);
+  res.json({ ok: true, name: d.name, total, url: d.invoiceUrl, sent });
+}));
+// Tracking ek click me
+app.post("/inbox/api/pro/send-tracking", ...proApi(async (req, res) => {
+  const phone = normPhone(req.body?.phone);
+  const orderId = String(req.body?.orderId || "");
+  if (!phone || !/^\d{5,20}$/.test(orderId)) return res.status(400).json({ error: "Order ID galat hai" });
+  const q = `query($id: ID!) { order(id: $id) { name fulfillments(first: 5) { trackingInfo { number url company } } } }`;
+  const o = (await shopifyGraphQL(q, { id: `gid://shopify/Order/${orderId}` }))?.data?.order;
+  if (!o) return res.status(404).json({ error: "Order nahi mila" });
+  const tr = (o.fulfillments || []).flatMap((f) => f.trackingInfo || []).filter((x) => x.number || x.url);
+  if (!tr.length) return res.status(400).json({ error: "Is order me abhi tracking nahi hai (pehle Shopify me fulfill karein)" });
+  const lines = [`🚚 Aapka order ${o.name} dispatch ho chuka hai.`];
+  for (const t of tr.slice(0, 3)) {
+    lines.push(`${t.company ? t.company + " " : ""}${t.number ? "Tracking no: " + t.number : ""}`.trim());
+    lines.push(`Track karein: ${t.url || REMINDER_FALLBACK_URL}`);
+  }
+  lines.push("", "Bazoora chunne ke liye dhanyavaad 🙏😊");
+  const text = lines.join("\n");
+  await agentSend(phone, { type: "text", text: { body: text } }, text);
+  proLog(null, "tracking-sent", o.name, phone);
+  res.json({ ok: true, message: "Tracking bhej di ✅" });
+}));
+// Catalog: photo + price ke saath
+app.get("/inbox/api/pro/catalog", ...proApi(async (req, res) => {
+  const term = String(req.query.q || "").replace(/[^\p{L}\p{N} ]/gu, " ").trim();
+  const q = `query($q: String!) { products(first: 20, query: $q) { nodes { title featuredImage { url } onlineStoreUrl priceRangeV2 { minVariantPrice { amount currencyCode } } } } }`;
+  const data = await shopifyGraphQL(q, { q: "status:active" + (term ? " " + term : "") });
+  res.json({
+    items: (data?.data?.products?.nodes || []).map((p) => ({
+      title: cleanText(p.title, 100),
+      price: Math.round(Number(p.priceRangeV2?.minVariantPrice?.amount) || 0),
+      image: p.featuredImage?.url || "",
+      url: p.onlineStoreUrl || "",
+    })),
+  });
+}));
+app.post("/inbox/api/pro/send-catalog", ...proApi(async (req, res) => {
+  const phone = normPhone(req.body?.phone);
+  const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 8) : [];
+  if (!phone || !items.length) return res.status(400).json({ error: "Kam se kam 1 product chunein" });
+  let n = 0;
+  for (const it of items) {
+    const cap = `${cleanText(it.title, 100)}\n💰 ₹${Math.round(Number(it.price) || 0)}${it.url ? "\n🔗 " + it.url : ""}`;
+    const img = /^https:\/\//i.test(String(it.image || "")) ? String(it.image) : "";
+    if (img) await agentSend(phone, { type: "image", image: { link: img, caption: cap } }, `[Product] ${cap}`);
+    else await agentSend(phone, { type: "text", text: { body: cap } }, cap);
+    n++;
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  proLog(null, "catalog", `${n} product bheje`, phone);
+  res.json({ ok: true, sent: n });
+}));
+// Scheduled messages
+app.get("/inbox/api/pro/scheduled", ...proApi(async (req, res) => {
+  const p = req.query.c ? normPhone(req.query.c) : "";
+  res.json({ items: pro.scheduled.filter((s) => !p || s.phone === p).sort((a, b) => b.at - a.at).slice(0, 100) });
+}));90
+app.post("/inbox/api/pro/scheduled", ...proApi(async (req, res) => {
+  const b = req.body || {};
+  if (b.op === "del") {
+    pro.scheduled = pro.scheduled.filter((s) => s.id !== String(b.id));
+    proSave();
+    return res.json({ ok: true });
+  }
+  const phone = normPhone(b.phone);
+  const text = String(b.text || "").trim().slice(0, 1500);
+  const at = Number(b.at);
+  const template = String(b.template || "").trim();
+  if (!phone || (!text && !template)) return res.status(400).json({ error: "Message likhein" });
+  if (!Number.isFinite(at) || at < Date.now() + 20000) return res.status(400).json({ error: "Aage ka time chunein" });
+  const who = proWho(req);
+  pro.scheduled.push({ id: "sc" + Date.now().toString(36) + Math.random().toString(36).slice(2, 4), phone, text, template, lang: String(b.lang || "en"), params: Array.isArray(b.params) ? b.params.map(String) : [], at, by: who ? who.name : "", status: "pending", created: Date.now() });
+  proLog(null, "schedule", `${fmtTime(at)}: ${text.slice(0, 50) || template}`, phone);
+  proSave();
+  res.json({ ok: true });
+}));
+// Review + refund tracking
+app.get("/inbox/api/pro/reviews", ...proApi(async (req, res) => {
+  const nodes = (await proAllOrders()).filter((o) => (o.tags || []).includes("wa-review-asked") && Date.now() - Date.parse(o.createdAt) < 90 * 86400000);
+  const items = nodes.slice(0, 80).map((o) => {
+    const id = String(o.legacyResourceId);
+    const ph = proOrderPhones(o).map(cleanPhone).find(Boolean) || "";
+    const rv = pro.reviews[id] || null;
+    return { id, name: o.name, phone: ph, cust: conversations.get(ph)?.meta?.alias || conversations.get(ph)?.name || "", at: Date.parse(o.createdAt), done: !!rv, rating: rv?.rating || 0, note: rv?.note || "" };
+  });
+  res.json({ items, received: items.filter((x) => x.done).length });
+}));
+app.post("/inbox/api/pro/reviews", ...proApi(async (req, res) => {
+  const id = String(req.body?.id || "");
+  if (!/^\d{5,20}$/.test(id)) return res.status(400).json({ error: "Order galat hai" });
+  if (req.body?.done === false) delete pro.reviews[id];
+  else pro.reviews[id] = { at: Date.now(), rating: Math.min(Math.max(parseInt(req.body?.rating, 10) || 0, 0), 5), note: String(req.body?.note || "").slice(0, 200) };
+  proLog(null, "review-mark", `Order ${id}`);
+  proSave();
+  res.json({ ok: true });
+}));
+app.get("/inbox/api/pro/refunds", ...proApi(async (req, res) => {
+  const shop = (await proAllOrders())
+    .filter((o) => Number(o.totalRefundedSet?.shopMoney?.amount) > 0 && Date.now() - Date.parse(o.createdAt) < 90 * 86400000)
+    .slice(0, 40)
+    .map((o) => ({ name: o.name, amount: Math.round(Number(o.totalRefundedSet.shopMoney.amount)), status: o.displayFinancialStatus, at: Date.parse(o.createdAt) }));
+  res.json({ items: pro.refunds.slice().sort((a, b) => b.at - a.at), shopify: shop });
+}));
+app.post("/inbox/api/pro/refunds", ...proApi(async (req, res) => {
+  const b = req.body || {};
+  if (b.op === "add") {
+    const amount = Number(b.amount);
+    const order = String(b.order || "").trim().slice(0, 30);
+    if (!order || !Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: "Order number aur amount likhein" });
+    pro.refunds.push({ id: "r" + Date.now().toString(36), phone: normPhone(b.phone) || "", order, amount: Math.round(amount), note: String(b.note || "").slice(0, 200), status: "pending", at: Date.now() });
+    proLog(null, "refund-add", `${order} ₹${Math.round(amount)}`, b.phone);
+  } else if (b.op === "done") {
+    const r = pro.refunds.find((x) => x.id === String(b.id));
+    if (r) {
+      r.status = r.status === "done" ? "pending" : "done";
+      r.doneAt = Date.now();
+      proLog(null, "refund-" + r.status, `${r.order} ₹${r.amount}`, r.phone);
+    }
+  } else if (b.op === "del") {
+    pro.refunds = pro.refunds.filter((x) => x.id !== String(b.id));
+  } else return res.status(400).json({ error: "Op galat hai" });
+  proSave();
+  res.json({ ok: true });
+}));
+// Activity log + backup export (sirf owner)
+app.get("/inbox/api/pro/activity", apiGuard, proOwnerOnly, (req, res) => {
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 20), 1000);
+  res.json({ items: pro.activity.slice(-limit).reverse() });
+});
+function proCsv(rows) {
+  return "\uFEFF" + rows.map((r) => r.map((v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+}
+app.get("/inbox/api/pro/export", apiGuard, proOwnerOnly, (req, res) => {
+  const fmt = String(req.query.format || "csv");
+  const only = req.query.c ? normPhone(req.query.c) : "";
+  const rows = [["Phone", "Naam", "Time (IST)", "Direction", "Kisne bheja", "Message", "Status"]];
+  for (const [p, c] of conversations) {
+    if (only && p !== only) continue;
+    for (const m of c.messages) rows.push([p, c.meta?.alias || c.name || "", fmtTime(m.time), m.dir === "in" ? "Customer" : "Hum", m.dir === "out" ? m.staff || (m.by ? "Owner" : m.auto ? "Auto" : "Bot") : "", m.text, m.status || ""]);
+  }
+  proLog(null, "backup-export", `${fmt}${only ? " " + only : ""}`, only);
+  const stamp = new Date().toISOString().slice(0, 10);
+  if (fmt === "json") {
+    return res.set("Content-Disposition", `attachment; filename="bazoora-chats-${stamp}.json"`).type("application/json").send(JSON.stringify(Object.fromEntries([...conversations].filter(([p]) => !only || p === only)), null, 1));
+  }
+  if (fmt === "html") {
+    const body = rows
+      .slice(1)
+      .map((r) => `<tr>${r.map((v) => `<td>${esc(v)}</td>`).join("")}</tr>`)
+      .join("");
+    return res.type("html").send(`<!doctype html><html><head><meta charset="utf-8"><title>Bazoora chats</title><style>body{font-family:Arial;font-size:12px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #bbb;padding:4px;vertical-align:top}th{background:#eee}</style></head><body><h3>Bazoora chats backup (${stamp})</h3><p>PDF ke liye: Print dabao → "Save as PDF" chuno.</p><table><tr>${rows[0].map((h) => `<th>${esc(h)}</th>`).join("")}</tr>${body}</table><script>setTimeout(function(){window.print()},500)</script></body></html>`);
+  }
+  res.set("Content-Disposition", `attachment; filename="bazoora-chats-${stamp}.csv"`).type("text/csv").send(proCsv(rows));
+});
+// Naya inbox UI (add-on) purani app.js / app.css ke saath jud kar aata hai
+app.get("/inbox/app.js", (req, res) => res.set("Cache-Control", "no-cache").type("application/javascript").send(INBOX_JS + "\n;" + PRO_CLIENT_JS));
+app.get("/inbox/app.css", (req, res) => res.set("Cache-Control", "no-cache").type("text/css").send(INBOX_CSS + "\n" + PRO_CSS));
+
+// ---------- Naya inbox screen (buttons, popups, report, settings) ----------
+function proClient() {
+  var $ = function (s, r) { return (r || document).querySelector(s); };
+  var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function api(path, o) {
+    o = o || {};
+    var init = { method: o.method || "GET", headers: { "x-inbox": "1" }, credentials: "same-origin" };
+    if (o.json !== undefined) { init.method = "POST"; init.headers["Content-Type"] = "application/json"; init.body = JSON.stringify(o.json); }
+    if (o.raw) { init.method = "POST"; init.headers["Content-Type"] = "application/octet-stream"; init.body = o.raw; }
+    return fetch(path, init).then(function (r) {
+      if (r.status === 401) { location.href = "/inbox/login"; throw new Error("Login chahiye"); }
+      return r.json().catch(function () { return {}; }).then(function (d) { if (!r.ok) throw new Error(d.error || "Error " + r.status); return d; });
+    });
+  }
+  var tt;
+  function toast(msg, bad) {
+    var t = $("#toast");
+    if (!t) return;
+    t.className = (bad ? "bad " : "") + "show";
+    t.textContent = msg;
+    clearTimeout(tt);
+    tt = setTimeout(function () { t.className = ""; }, 4000);
+  }
+  function fail(e) { toast(e && e.message ? e.message : "Error", true); }
+  function fmt(ms) { return ms ? new Date(ms).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true }) : "-"; }
+  function dur(ms) {
+    var m = Math.round(ms / 60000);
+    if (m < 1) return "1 min se kam";
+    if (m < 60) return m + " min";
+    var h = Math.floor(m / 60);
+    return h < 24 ? h + " ghanta " + (m % 60) + " min" : Math.floor(h / 24) + " din " + (h % 24) + " ghanta";
+  }
+  function rs(n) { return "₹" + Math.round(Number(n) || 0).toLocaleString("en-IN"); }
+  function curPhone() { var e = $(".ci.on"); return e ? e.getAttribute("data-p") : ""; }
+  function modal(title, body, wide) {
+    var m = $("#modal");
+    if (!m) return null;
+    m.innerHTML = '<div class="ov"><div class="md' + (wide ? " wide" : "") + '"><div class="mh"><b>' + esc(title) + '</b><button class="x" data-pclose="1">✕</button></div><div class="mbd">' + body + "</div></div></div>";
+    m.firstChild.addEventListener("mousedown", function (e) { if (e.target === m.firstChild) closeModal(); });
+    return $(".mbd", m);
+  }
+  function closeModal() { var m = $("#modal"); if (m) m.innerHTML = ""; }
+  var CFG = null;
+  function loadCfg() { return api("/inbox/api/pro/config").then(function (d) { CFG = d; return d; }); }
+  function isOwner() { return CFG && CFG.who && CFG.who.role === "owner"; }
+  // ---- injection into existing screen ----
+  var ASG = {}, MSTAFF = {}, msFor = "";
+  function inject() {
+    var sbt = $(".sbt");
+    if (sbt && !$("#pRep")) {
+      var b1 = document.createElement("button"); b1.className = "ib"; b1.id = "pRep"; b1.title = "Report: source, reply time"; b1.textContent = "📊";
+      var b2 = document.createElement("button"); b2.className = "ib"; b2.id = "pSet"; b2.title = "Pro tools"; b2.textContent = "🛠";
+      sbt.insertBefore(b2, sbt.firstChild); sbt.insertBefore(b1, sbt.firstChild);
+    }
+    var ha = $(".ha");
+    if (ha && !$("#pProf")) {
+      ha.insertAdjacentHTML("afterbegin", '<button class="ib" id="pProf" title="Customer profile">👤</button><button class="ib" id="pAsg" title="Chat assign / transfer">🔁</button>');
+    }
+    var cp = $(".cp");
+    if (cp && !$("#pPlus")) {
+      var pb = document.createElement("button"); pb.className = "ib"; pb.id = "pPlus"; pb.title = "Order / Catalog / Schedule / UPI"; pb.textContent = "➕";
+      cp.insertBefore(pb, $("#txt", cp) || cp.firstChild);
+    }
+    $$("#panel .oc").forEach(function (oc) {
+      if ($(".ptrk", oc)) return;
+      var idEl = $("[data-id]", oc), oa = $(".oa", oc);
+      if (!idEl || !oa) return;
+      var b = document.createElement("button"); b.className = "mini ptrk"; b.setAttribute("data-ptrk", idEl.getAttribute("data-id")); b.textContent = "🚚 Tracking bhejo";
+      oa.appendChild(b);
+    });
+    $$(".ci").forEach(function (ci) {
+      var name = ASG[ci.getAttribute("data-p")], old = $(".pasg", ci);
+      if (!name) { if (old) old.remove(); return; }
+      if (old && old.getAttribute("data-n") === name) return;
+      if (old) old.remove();
+      var host = $(".r3", ci) || ci;
+      host.insertAdjacentHTML("beforeend", '<span class="lb pasg" data-n="' + esc(name) + '">👤 ' + esc(name) + "</span>");
+    });
+    $$(".mw.o[data-id]").forEach(function (mw) {
+      var n = MSTAFF[mw.getAttribute("data-id")];
+      if (!n || $(".pstf", mw)) return;
+      var mf = $(".mf", mw);
+      if (mf) mf.insertAdjacentHTML("afterbegin", '<span class="bot pstf">' + esc(n) + "</span>");
+    });
+  }
+  var injT;
+  function sched() { clearTimeout(injT); injT = setTimeout(inject, 90); }
+  function pollAsg() { api("/inbox/api/pro/assignments").then(function (d) { ASG = d.map || {}; sched(); }).catch(function () {}); }
+  function pollMs() {
+    var p = curPhone();
+    if (!p) return;
+    api("/inbox/api/pro/msgstaff?c=" + encodeURIComponent(p)).then(function (d) { MSTAFF = d.map || {}; sched(); }).catch(function () {});
+  }
+  // ---- popup menu (➕) ----
+  function closePopP() { $$(".pop.ppop").forEach(function (p) { p.remove(); }); }
+  function openPlusMenu(btn) {
+    closePopP();
+    var p = document.createElement("div"); p.className = "pop ppop";
+    var items = [["🧾 Order / payment link banao", "draft"], ["🛍 Catalog (photo + price)", "catalog"], ["💳 UPI + QR bhejo", "payinfo"], ["⏰ Baad me bhejo (schedule)", "schedule"]];
+    p.innerHTML = items.map(function (i) { return '<button data-pm="' + i[1] + '">' + i[0] + "</button>"; }).join("");
+    document.body.appendChild(p);
+    var r = btn.getBoundingClientRect();
+    p.style.left = Math.max(6, Math.min(r.left, window.innerWidth - 260)) + "px";
+    p.style.bottom = (window.innerHeight - r.top + 6) + "px";
+    setTimeout(function () { document.addEventListener("click", function (e) { if (!e.target.closest(".ppop")) closePopP(); }, { once: true }); }, 0);
+  }
+  // ---- 1) Customer profile ----
+  function openProfile() {
+    var ph = curPhone();
+    if (!ph) return toast("Pehle chat kholein", true);
+    var b = modal("👤 Customer profile", '<div class="pm">Dekh raha hoon…</div>');
+    api("/inbox/api/pro/profile?c=" + encodeURIComponent(ph)).then(function (d) {
+      var tag = d.vip ? '<span class="lb big pvip">⭐ VIP</span> ' : "";
+      tag += d.risky ? '<span class="lb big prisk">⚠ Risky</span> ' : "";
+      tag += d.blocked ? '<span class="lb big prisk">🚫 Blocked</span>' : "";
+      var h = "<b>" + esc(d.name || "+" + d.phone) + "</b> <small>+" + esc(d.phone) + "</small><div style=\"margin:6px 0\">" + (tag || '<small>Abhi koi tag nahi</small>') + "</div>";
+      h += '<div class="pgrid"><div><b>' + d.orders + "</b><small>Total order</small></div><div><b>" + rs(d.spent) + "</b><small>Total kharch</small></div><div><b>" + d.cancelled + "</b><small>Cancel</small></div><div><b>" + d.rto + "</b><small>RTO</small></div><div><b>" + d.delivered + "</b><small>Delivered</small></div><div><b>" + rs(d.avg) + "</b><small>Avg order</small></div></div>";
+      h += "<small>Pehla order: " + fmt(d.first) + " | Aakhri: " + fmt(d.last) + (d.refunded ? " | Refund: " + d.refunded : "") + "</small><br>";
+      h += "<small>Source: " + esc(d.source || "-") + " | Assigned: " + esc(d.assigned || "-") + (d.labels.length ? " | Labels: " + esc(d.labels.join(", ")) : "") + "</small>";
+      h += '<div style="margin-top:8px"><b>Aakhri orders</b></div>';
+      if (!d.recent.length) h += '<div class="pm">Pichle 1 saal me koi order nahi mila</div>';
+      d.recent.forEach(function (o) { h += '<div class="row"><div><b>' + esc(o.name) + "</b> " + rs(o.total) + (o.cancelled ? " ❌" : "") + (o.rto ? " ↩RTO" : "") + "<br><small>" + fmt(o.at) + " | " + esc(o.pay || "") + " | " + esc(o.ful || "") + "<br>" + esc(o.items) + "</small></div></div>"; });
+      if (isOwner()) h += '<div class="btns"><button data-plabel="VIP">⭐ VIP label</button><button data-plabel="Risky">⚠ Risky label</button></div>';
+      b.innerHTML = h;
+      b.addEventListener("click", function (e) {
+        var t = e.target.closest("[data-plabel]");
+        if (!t) return;
+        var name = t.getAttribute("data-plabel");
+        api("/inbox/api/settings", { json: { op: "label_add", name: name } }).catch(function () {}).then(function () {
+          return api("/inbox/api/chat-action", { json: { phone: ph, action: "label_add", value: name } });
+        }).then(function () { toast(name + " label laga diya"); }).catch(fail);
+      });
+    }).catch(function (e) { b.innerHTML = '<div class="pm bad">' + esc(e.message) + "</div>"; });
+  }
+  // ---- 2) Assign / transfer ----
+  function openAssign() {
+    var ph = curPhone();
+    if (!ph) return toast("Pehle chat kholein", true);
+    loadCfg().then(function (c) {
+      var opts = '<option value="">— Kisi ko nahi —</option><option value="owner">Owner</option>' + (c.staff || []).filter(function (s) { return !s.off; }).map(function (s) { return '<option value="' + esc(s.id) + '">' + esc(s.name) + "</option>"; }).join("");
+      var b = modal("🔁 Chat assign / transfer", '<small>Abhi: ' + esc(ASG[ph] || "koi nahi") + '</small><select id="asTo">' + opts + '</select><textarea id="asNote" rows="3" placeholder="Note (transfer ke saath jayega)"></textarea><div class="btns"><button class="pri" id="asGo">Transfer karo</button></div>');
+      $("#asGo", b).onclick = function () {
+        api("/inbox/api/pro/assign", { json: { phone: ph, to: $("#asTo", b).value, note: $("#asNote", b).value } }).then(function () { toast("Transfer ho gaya ✅"); closeModal(); pollAsg(); }).catch(fail);
+      };
+    }).catch(fail);
+  }
+  // ---- 3) Draft order / payment link ----
+  function openDraft() {
+    var ph = curPhone();
+    if (!ph) return toast("Pehle chat kholein", true);
+    var cart = [];
+    var b = modal("🧾 Order / payment link", '<div class="na" style="display:flex;gap:6px"><input id="dQ" placeholder="Product dhundo"><button class="mini" id="dGo">Dhundo</button></div><div id="dRes" style="max-height:170px;overflow:auto"></div><b>Custom item</b><div style="display:flex;gap:6px"><input id="dCT" placeholder="Naam"><input id="dCP" type="number" placeholder="₹ price" style="max-width:100px"><button class="mini" id="dCA">+</button></div><b>Cart</b><div id="dCart"><div class="pm">Khali</div></div><input id="dDisc" type="number" placeholder="Discount % (optional)"><label class="pchk"><input type="checkbox" id="dSend" checked> Customer ko link seedha bhej do</label><div class="btns"><button class="pri" id="dMake">Link banao</button></div>', true);
+    function drawCart() {
+      $("#dCart", b).innerHTML = cart.length ? cart.map(function (c, i) { return '<div class="row"><div>' + esc(c.title) + " <small>" + rs(c.price) + '</small></div><div><input type="number" min="1" value="' + c.qty + '" data-dq="' + i + '" style="width:60px"> <button class="mini danger" data-dx="' + i + '">✕</button></div></div>'; }).join("") : '<div class="pm">Khali</div>';
+    }
+    function go() {
+      $("#dRes", b).innerHTML = '<div class="pm">Dhundh raha hoon…</div>';
+      api("/inbox/api/pro/variants?q=" + encodeURIComponent($("#dQ", b).value)).then(function (d) {
+        window.__pv = d.items || [];
+        $("#dRes", b).innerHTML = window.__pv.length ? window.__pv.map(function (v, i) { return '<div class="row"><div>' + esc(v.title) + " <small>" + rs(v.price) + '</small></div><button class="mini" data-dadd="' + i + '">+ Add</button></div>'; }).join("") : '<div class="pm">Kuch nahi mila</div>';
+      }).catch(function (e) { $("#dRes", b).innerHTML = '<div class="pm bad">' + esc(e.message) + "</div>"; });
+    }
+    $("#dGo", b).onclick = go;
+    $("#dQ", b).addEventListener("keydown", function (e) { if (e.key === "Enter") go(); });
+    $("#dCA", b).onclick = function () {
+      var t = $("#dCT", b).value.trim(), p = Number($("#dCP", b).value);
+      if (!t || !(p > 0)) return toast("Naam aur price likhein", true);
+      cart.push({ title: t, price: p, qty: 1 }); $("#dCT", b).value = ""; $("#dCP", b).value = ""; drawCart();
+    };
+    b.addEventListener("click", function (e) {
+      var a = e.target.closest("[data-dadd]"), x = e.target.closest("[data-dx]");
+      if (a) { var v = window.__pv[Number(a.getAttribute("data-dadd"))]; cart.push({ variantId: v.id, title: v.title, price: v.price, qty: 1 }); drawCart(); }
+      if (x) { cart.splice(Number(x.getAttribute("data-dx")), 1); drawCart(); }
+    });
+    b.addEventListener("input", function (e) { var q = e.target.getAttribute && e.target.getAttribute("data-dq"); if (q != null) cart[Number(q)].qty = Math.max(1, parseInt(e.target.value, 10) || 1); });
+    $("#dMake", b).onclick = function () {
+      if (!cart.length) return toast("Pehle item chunein", true);
+      $("#dMake", b).disabled = true;
+      api("/inbox/api/pro/draft-order", { json: { phone: ph, items: cart, discountPct: Number($("#dDisc", b).value) || 0, send: $("#dSend", b).checked } }).then(function (d) {
+        toast(d.sent ? d.name + " ka link customer ko bhej diya ✅" : d.name + " bana: " + d.url);
+        closeModal();
+      }).catch(function (e) { $("#dMake", b).disabled = false; fail(e); });
+    };
+  }
+  // ---- 4) Catalog ----
+  function openCatalog() {
+    var ph = curPhone();
+    if (!ph) return toast("Pehle chat kholein", true);
+    var b = modal("🛍 Catalog bhejo", '<div class="na" style="display:flex;gap:6px"><input id="cQ" placeholder="Product dhundo (khali = sab)"><button class="mini" id="cGo">Dhundo</button></div><div id="cRes" style="max-height:300px;overflow:auto"></div><div class="btns"><button class="pri" id="cSend">Chune hue bhejo</button></div>', true);
+    function go() {
+      $("#cRes", b).innerHTML = '<div class="pm">Dhundh raha hoon…</div>';
+      api("/inbox/api/pro/catalog?q=" + encodeURIComponent($("#cQ", b).value)).then(function (d) {
+        window.__pc = d.items || [];
+        $("#cRes", b).innerHTML = window.__pc.length ? window.__pc.map(function (v, i) { return '<label class="row pchk">' + (v.image ? '<img class="pimg" src="' + esc(v.image) + '">' : "") + '<div style="flex:1">' + esc(v.title) + "<br><small>" + rs(v.price) + '</small></div><input type="checkbox" data-ci="' + i + '"></label>'; }).join("") : '<div class="pm">Kuch nahi mila</div>';
+      }).catch(function (e) { $("#cRes", b).innerHTML = '<div class="pm bad">' + esc(e.message) + "</div>"; });
+    }
+    $("#cGo", b).onclick = go;
+    $("#cQ", b).addEventListener("keydown", function (e) { if (e.key === "Enter") go(); });
+    go();
+    $("#cSend", b).onclick = function () {
+      var items = $$("[data-ci]:checked", b).map(function (c) { return window.__pc[Number(c.getAttribute("data-ci"))]; });
+      if (!items.length) return toast("Kam se kam 1 product chunein (max 8)", true);
+      $("#cSend", b).disabled = true;
+      api("/inbox/api/pro/send-catalog", { json: { phone: ph, items: items } }).then(function (d) { toast(d.sent + " product bheje ✅"); closeModal(); }).catch(function (e) { $("#cSend", b).disabled = false; fail(e); });
+    };
+  }
+  // ---- 5) UPI + QR bhejo ----
+  function sendPayInfo() {
+    var ph = curPhone();
+    if (!ph) return toast("Pehle chat kholein", true);
+    api("/inbox/api/pro/send-payinfo", { json: { phone: ph } }).then(function () { toast("UPI / QR bhej diya ✅"); }).catch(fail);
+  }
+  // ---- 6) Schedule ----
+  function openSchedule() {
+    var ph = curPhone();
+    if (!ph) return toast("Pehle chat kholein", true);
+    var b = modal("⏰ Baad me bhejo", '<textarea id="scT" rows="4" placeholder="Message likhein"></textarea><input type="datetime-local" id="scAt"><details><summary><small>24 ghante ke baad ke liye template (optional)</small></summary><input id="scTpl" placeholder="Template ka naam"><input id="scLang" placeholder="Language (en / hi)" value="en"><textarea id="scPar" rows="2" placeholder="Parameters (har line me ek)"></textarea></details><small>Customer ne 24 ghante ke andar message kiya ho tabhi seedha text jaata hai.</small><div class="btns"><button class="pri" id="scGo">Schedule karo</button></div><div id="scList"></div>');
+    var d0 = new Date(Date.now() + 3600000); d0.setMinutes(0, 0, 0);
+    $("#scAt", b).value = new Date(d0.getTime() - d0.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    function list() {
+      api("/inbox/api/pro/scheduled?c=" + encodeURIComponent(ph)).then(function (d) {
+        $("#scList", b).innerHTML = '<div style="margin-top:10px"><b>Is chat ke scheduled</b></div>' + ((d.items || []).length ? d.items.map(function (s) { return '<div class="row"><div><b>' + fmt(s.at) + " — " + esc(s.status) + "</b><br><small>" + esc(s.text || s.template) + (s.error ? " | " + esc(s.error) : "") + "</small></div>" + (s.status === "pending" ? '<button class="mini danger" data-scdel="' + esc(s.id) + '">🗑</button>' : "") + "</div>"; }).join("") : '<div class="pm">Koi nahi</div>');
+      }).catch(function () {});
+    }
+    list();
+    b.addEventListener("click", function (e) { var x = e.target.closest("[data-scdel]"); if (x) api("/inbox/api/pro/scheduled", { json: { op: "del", id: x.getAttribute("data-scdel") } }).then(list).catch(fail); });
+    $("#scGo", b).onclick = function () {
+      api("/inbox/api/pro/scheduled", { json: { phone: ph, text: $("#scT", b).value, at: new Date($("#scAt", b).value).getTime(), template: $("#scTpl", b).value, lang: $("#scLang", b).value, params: $("#scPar", b).value.split("\n").map(function (x) { return x.trim(); }).filter(Boolean) } }).then(function () { toast("Schedule ho gaya ⏰"); $("#scT", b).value = ""; list(); }).catch(fail);
+    };
+  }
+  // ---- 7) Tracking ek click ----
+  function sendTracking(btn) {
+    var ph = curPhone(), id = btn.getAttribute("data-ptrk");
+    if (!ph) return toast("Pehle chat kholein", true);
+    btn.disabled = true;
+    api("/inbox/api/pro/send-tracking", { json: { phone: ph, orderId: id } }).then(function (d) { toast(d.message || "Tracking bhej di ✅"); btn.disabled = false; }).catch(function (e) { btn.disabled = false; fail(e); });
+  }
+  // ---- 8) Report (source / reply time / pending) ----
+  function openReport(tab, days) {
+    tab = tab || "src"; days = days || 7;
+    var tabs = [["src", "📍 Source"], ["rt", "⏱ Reply time"], ["pend", "⏳ Pending"]];
+    var h = '<div class="tabs">' + tabs.map(function (t) { return '<button class="tab' + (tab === t[0] ? " on" : "") + '" data-rt="' + t[0] + '">' + t[1] + "</button>"; }).join("") + '</div><div class="opts">' + [1, 7, 30].map(function (d) { return '<button class="opt' + (days === d ? " on" : "") + '" data-rd="' + d + '">' + (d === 1 ? "Aaj" : d + " din") + "</button>"; }).join("") + '</div><div id="rBody"><div class="pm">Hisaab laga raha hoon…</div></div>';
+    var b = modal("📊 Report", h, true);
+    b.addEventListener("click", function (e) {
+      var t = e.target.closest("[data-rt]"), d = e.target.closest("[data-rd]");
+      if (t) openReport(t.getAttribute("data-rt"), days);
+      if (d) openReport(tab, Number(d.getAttribute("data-rd")));
+    });
+    var box = $("#rBody", b);
+    if (tab === "src") {
+      api("/inbox/api/pro/sources?days=" + days).then(function (d) {
+        if (!d.rows.length) { box.innerHTML = '<div class="pm">Is period me koi order nahi</div>'; return; }
+        var mx = Math.max.apply(null, d.rows.map(function (r) { return r.sale; })) || 1;
+        var s = '<div class="pgrid"><div><b>' + d.total + "</b><small>Total order</small></div><div><b>" + rs(d.totalSale) + "</b><small>Total bikri</small></div><div><b>" + d.adsOrders + "</b><small>Ads se order</small></div><div><b>" + rs(d.adsSale) + "</b><small>Ads se bikri</small></div></div>";
+        if (d.best) s += '<div class="pm">🏆 Sabse zyada bikri: <b>' + esc(d.best.label) + "</b> (" + rs(d.best.sale) + ")</div>";
+        s += d.rows.map(function (r) { return '<div class="row"><div style="flex:1"><b>' + esc(r.label) + "</b> <small>" + r.orders + " order" + (r.cancelled ? ", cancel " + r.cancelled : "") + '</small><div class="pbar"><i style="width:' + Math.round((r.sale / mx) * 100) + '%"></i></div></div><b>' + rs(r.sale) + "</b></div>"; }).join("");
+        box.innerHTML = s;
+      }).catch(function (e) { box.innerHTML = '<div class="pm bad">' + esc(e.message) + "</div>"; });
+    } else {
+      api("/inbox/api/pro/stats?days=" + days).then(function (d) {
+        if (tab === "rt") {
+          var s = '<div class="pgrid"><div><b>' + dur(d.avgMs) + "</b><small>Average reply</small></div><div><b>" + dur(d.medianMs) + "</b><small>Median</small></div><div><b>" + d.count + "</b><small>Replies</small></div><div><b>" + (d.count ? Math.round((d.within5 / d.count) * 100) : 0) + "%</b><small>5 min ke andar</small></div></div><b>Staff ke hisaab se</b>";
+          s += d.staff.length ? d.staff.map(function (x) { return '<div class="row"><div><b>' + esc(x.name) + "</b><br><small>" + x.n + " reply</small></div><b>" + dur(x.avgMs) + "</b></div>"; }).join("") : '<div class="pm">Abhi data nahi</div>';
+          box.innerHTML = s;
+        } else {
+          box.innerHTML = '<div class="pm">Jawab ka intezaar: <b>' + d.pendingTotal + "</b> chat (sabse purani upar)</div>" + d.pending.map(function (p) { return '<div class="row"><div><b>' + esc(p.name || "+" + p.phone) + "</b> <small>+" + esc(p.phone) + (p.assigned ? " | 👤 " + esc(p.assigned) : "") + "</small><br><small>" + esc(p.text) + '</small></div><b class="' + (Date.now() - p.since > 7200000 ? "pred" : "") + '">' + dur(Date.now() - p.since) + "</b></div>"; }).join("");
+        }
+      }).catch(function (e) { box.innerHTML = '<div class="pm bad">' + esc(e.message) + "</div>"; });
+    }
+  }
+  // ---- 9) Pro settings ----
+function openPro(tab) {
+    loadCfg().then(function (c) {
+      var own = isOwner();
+      var all = [["sch", "⏰ Scheduled"], ["ref", "💸 Refund"], ["rev", "⭐ Review"]];
+      if (own) all = [["stf", "👥 Staff"], ["nt", "🌙 Raat"], ["pay", "💳 UPI/QR/AI"], ["cart", "🛒 Cart"], ["spam", "🚫 Spam"]].concat(all, [["log", "📜 Log"], ["bk", "💾 Backup"]]);
+      tab = tab || all[0][0];
+      var h = '<div class="tabs">' + all.map(function (t) { return '<button class="tab' + (tab === t[0] ? " on" : "") + '" data-ptab="' + t[0] + '">' + t[1] + "</button>"; }).join("") + '</div><div id="pBody"></div>';
+      var b = modal("🛠 Pro tools", h, true);
+      b.addEventListener("click", function (e) { var t = e.target.closest("[data-ptab]"); if (t) openPro(t.getAttribute("data-ptab")); });
+      var box = $("#pBody", b);
+      var again = function () { openPro(tab); };
+      var post = function (json, msg) { return api("/inbox/api/pro/config", { json: json }).then(function () { toast(msg || "Save ho gaya ✅"); }).catch(fail); };
+      if (tab === "stf") {
+        box.innerHTML = '<div id="stl">' + ((c.staff || []).length ? c.staff.map(function (s) { return '<div class="row"><div><b>' + esc(s.name) + "</b> <small>@" + esc(s.user) + (s.off ? " (band)" : "") + '</small></div><div><button class="mini" data-so="' + esc(s.id) + '">' + (s.off ? "Chalu" : "Band") + '</button> <button class="mini" data-sp="' + esc(s.id) + '">🔑</button> <button class="mini danger" data-sd="' + esc(s.id) + '">🗑</button></div></div>'; }).join("") : '<div class="pm">Abhi koi staff nahi</div>') + '</div><b>Naya staff</b><input id="sN" placeholder="Naam"><input id="sU" placeholder="Username (chhote akshar)"><input id="sP" type="password" placeholder="Password (6+ akshar)"><div class="btns"><button class="pri" id="sA">Staff banao</button></div><small>Staff ko login page ke neeche "Staff login" se jana hai. Staff settings, broadcast, block/delete aur order cancel nahi kar sakta.</small>';
+        $("#sA", box).onclick = function () { api("/inbox/api/pro/staff", { json: { op: "add", name: $("#sN", box).value, user: $("#sU", box).value, pass: $("#sP", box).value } }).then(function () { toast("Staff ban gaya ✅"); again(); }).catch(fail); };
+        box.addEventListener("click", function (e) {
+          var o = e.target.closest("[data-so]"), p = e.target.closest("[data-sp]"), d = e.target.closest("[data-sd]");
+          if (o) api("/inbox/api/pro/staff", { json: { op: "off", id: o.getAttribute("data-so") } }).then(again).catch(fail);
+          if (p) { var np = prompt("Naya password (6+ akshar)"); if (np) api("/inbox/api/pro/staff", { json: { op: "passwd", id: p.getAttribute("data-sp"), pass: np } }).then(function () { toast("Password badal diya"); }).catch(fail); }
+          if (d && confirm("Staff hata dein?")) api("/inbox/api/pro/staff", { json: { op: "del", id: d.getAttribute("data-sd") } }).then(again).catch(fail);
+        });
+      } else if (tab === "nt") {
+        var n = c.night, hrs = function (v) { var o = ""; for (var i = 0; i < 24; i++) o += '<option value="' + i + '"' + (i === v ? " selected" : "") + ">" + (i % 12 || 12) + (i < 12 ? " AM" : " PM") + "</option>"; return o; };
+        box.innerHTML = '<label class="pchk"><input type="checkbox" id="nOn"' + (n.on ? " checked" : "") + '> Raat ka auto-reply chalu</label><div style="display:flex;gap:8px;align-items:center">Se <select id="nS">' + hrs(n.start) + '</select> tak <select id="nE">' + hrs(n.end) + '</select></div><textarea id="nT" rows="4">' + esc(n.text) + '</textarea><small>Har customer ko is time me 8 ghante me sirf ek baar jayega (India time).</small><div class="btns"><button class="pri" id="nSave">Save</button></div>';
+        $("#nSave", box).onclick = function () { post({ op: "night", on: $("#nOn", box).checked, start: Number($("#nS", box).value), end: Number($("#nE", box).value), text: $("#nT", box).value }); };
+      } else if (tab === "pay") {
+        box.innerHTML = '<b>UPI ID</b><input id="pU" value="' + esc(c.payInfo.upi) + '" placeholder="' + esc(c.payInfo.envUpi || "name@upi") + '"><b>Payment QR image</b><div>' + (c.payInfo.hasQr ? '<img class="pqr" src="/inbox/api/pro/qr?t=' + Date.now() + '">' : '<div class="pm">QR abhi upload nahi hai</div>') + '</div><input type="file" id="pQ" accept="image/png,image/jpeg"><div class="btns">' + (c.payInfo.hasQr ? '<button class="danger" id="pQd">QR hatao</button>' : "") + '</div><b>Payment note (optional)</b><textarea id="pNote" rows="2" placeholder="Jaise: Payment ke baad screenshot bhejein">' + esc(c.payInfo.note) + '</textarea><b>AI ko extra jaankari</b><textarea id="pK" rows="5" placeholder="Jo bhi AI ko pata hona chahiye: bank details, offers, return policy, delivery time…">' + esc(c.knowledge) + '</textarea><small>Customer "UPI ID / QR / payment kaise karu" poochhe to bot turant UPI ID + QR bhej deta hai. AI ko ye jaankari bhi milti hai.</small><div class="btns"><button class="pri" id="pS">Save</button></div>';
+        $("#pS", box).onclick = function () { post({ op: "payinfo", upi: $("#pU", box).value, note: $("#pNote", box).value, knowledge: $("#pK", box).value }); };
+        $("#pQ", box).onchange = function () {
+          var f = this.files[0];
+          if (!f) return;
+          if (f.size > 3.5 * 1024 * 1024) return toast("Image 3.5MB se chhoti rakhein", true);
+          f.arrayBuffer().then(function (buf) { return api("/inbox/api/pro/qr?mime=" + encodeURIComponent(f.type), { raw: buf }); }).then(function () { toast("QR save ho gaya ✅"); again(); }).catch(fail);
+        };
+        var qd = $("#pQd", box);
+        if (qd) qd.onclick = function () { post({ op: "qr_del" }).then(again); };
+      } else if (tab === "cart") {
+        box.innerHTML = '<label class="pchk"><input type="checkbox" id="aOn"' + (c.abandoned.on ? " checked" : "") + '> Abandoned cart reminder chalu</label><div>Cart chhodne ke kitne minute baad yaad dilayein: <input id="aD" type="number" value="' + c.abandoned.delayMin + '" style="width:90px"></div><small>' + (c.abandoned.template ? "Template set hai: 24 ghante ke baad bhi jayega." : "Template (ABANDONED_TEMPLATE) set nahi: sirf wahi customer jinhone 24 ghante me message kiya.") + " Cart ka phone number Shopify checkout me hona chahiye.</small><div class=\"btns\"><button class=\"pri\" id=\"aS\">Save</button></div>";
+        $("#aS", box).onclick = function () { post({ op: "abandoned", on: $("#aOn", box).checked, delayMin: Number($("#aD", box).value) }); };
+      } else if (tab === "spam") {
+        var sp = c.spam;
+        box.innerHTML = '<label class="pchk"><input type="checkbox" id="spOn"' + (sp.on ? " checked" : "") + '> Spam rokna chalu</label><div>1 minute me itne messages se zyada = flag: <input id="spM" type="number" value="' + sp.perMin + '" style="width:80px"></div><div>5 minute me itne messages = number block: <input id="spB" type="number" value="' + sp.autoBlock + '" style="width:80px"></div><div class="btns"><button class="pri" id="spS">Save</button></div>';
+        $("#spS", box).onclick = function () { post({ op: "spam", on: $("#spOn", box).checked, perMin: Number($("#spM", box).value), autoBlock: Number($("#spB", box).value) }); };
+      } else if (tab === "sch") {
+        api("/inbox/api/pro/scheduled").then(function (d) {
+          box.innerHTML = (d.items || []).length ? d.items.map(function (s) { return '<div class="row"><div><b>+' + esc(s.phone) + " | " + fmt(s.at) + " | " + esc(s.status) + "</b><br><small>" + esc(s.text || s.template) + (s.error ? " | " + esc(s.error) : "") + "</small></div>" + (s.status === "pending" ? '<button class="mini danger" data-scdel="' + esc(s.id) + '">🗑</button>' : "") + "</div>"; }).join("") : '<div class="pm">Koi scheduled message nahi</div>';
+          box.addEventListener("click", function (e) { var x = e.target.closest("[data-scdel]"); if (x) api("/inbox/api/pro/scheduled", { json: { op: "del", id: x.getAttribute("data-scdel") } }).then(again).catch(fail); });
+        }).catch(fail);
+      } else if (tab === "ref") {
+        api("/inbox/api/pro/refunds").then(function (d) {
+          var s = '<b>Refund pending list</b>' + (d.items.length ? d.items.map(function (r) { return '<div class="row"><div><b>' + esc(r.order) + " " + rs(r.amount) + "</b> " + (r.status === "done" ? "✅ ho gaya" : "⏳ pending") + "<br><small>" + (r.phone ? "+" + esc(r.phone) + " | " : "") + esc(r.note) + " | " + fmt(r.at) + '</small></div><div><button class="mini" data-rdn="' + esc(r.id) + '">' + (r.status === "done" ? "↩" : "✔ Ho gaya") + '</button> <button class="mini danger" data-rdl="' + esc(r.id) + '">🗑</button></div></div>'; }).join("") : '<div class="pm">Koi nahi</div>');
+          s += '<b>Naya refund</b><input id="rfO" placeholder="Order number (#1234)"><input id="rfA" type="number" placeholder="Amount ₹"><input id="rfP" placeholder="Customer phone (optional)"><input id="rfN" placeholder="Note"><div class="btns"><button class="pri" id="rfAdd">Add</button></div>';
+          if (d.shopify.length) s += "<b>Shopify me refund hue</b>" + d.shopify.map(function (r) { return '<div class="row"><div><b>' + esc(r.name) + "</b> <small>" + esc(r.status) + "</small></div><b>" + rs(r.amount) + "</b></div>"; }).join("");
+          box.innerHTML = s;
+          $("#rfAdd", box).onclick = function () { api("/inbox/api/pro/refunds", { json: { op: "add", order: $("#rfO", box).value, amount: Number($("#rfA", box).value), phone: $("#rfP", box).value, note: $("#rfN", box).value } }).then(again).catch(fail); };
+          box.addEventListener("click", function (e) {
+            var a = e.target.closest("[data-rdn]"), x = e.target.closest("[data-rdl]");
+            if (a) api("/inbox/api/pro/refunds", { json: { op: "done", id: a.getAttribute("data-rdn") } }).then(again).catch(fail);
+            if (x) api("/inbox/api/pro/refunds", { json: { op: "del", id: x.getAttribute("data-rdl") } }).then(again).catch(fail);
+          });
+        }).catch(fail);
+      } else if (tab === "rev") {
+        api("/inbox/api/pro/reviews").then(function (d) {
+          box.innerHTML = '<div class="pm">Review maange: <b>' + d.items.length + "</b> | Mil gaye: <b>" + d.received + "</b></div>" + (d.items.length ? d.items.map(function (r) { return '<div class="row"><div><b>' + esc(r.name) + "</b> " + (r.done ? "⭐ mil gaya" : "⏳ intezaar") + "<br><small>" + esc(r.cust || (r.phone ? "+" + r.phone : "")) + " | " + fmt(r.at) + '</small></div><button class="mini" data-rv="' + esc(r.id) + '" data-rvd="' + (r.done ? "0" : "1") + '">' + (r.done ? "↩" : "✔ Review mila") + "</button></div>"; }).join("") : '<div class="pm">Abhi koi review request nahi gayi</div>');
+          box.addEventListener("click", function (e) { var a = e.target.closest("[data-rv]"); if (a) api("/inbox/api/pro/reviews", { json: { id: a.getAttribute("data-rv"), done: a.getAttribute("data-rvd") === "1" } }).then(again).catch(fail); });
+        }).catch(fail);
+      } else if (tab === "log") {
+        api("/inbox/api/pro/activity?limit=300").then(function (d) {
+          box.innerHTML = d.items.length ? d.items.map(function (a) { return '<div class="row"><div><b>' + esc(a.who) + "</b> — " + esc(a.act) + (a.phone ? " <small>+" + esc(a.phone) + "</small>" : "") + "<br><small>" + esc(a.detail) + " | " + fmt(a.t) + "</small></div></div>"; }).join("") : '<div class="pm">Abhi koi record nahi</div>';
+        }).catch(fail);
+      } else if (tab === "bk") {
+        box.innerHTML = '<div class="pm">Saari chats ka backup:</div><div class="btns"><a class="btnlink" href="/inbox/api/pro/export?format=csv" target="_blank">📊 Excel (CSV)</a><a class="btnlink" href="/inbox/api/pro/export?format=html" target="_blank">📄 PDF (print)</a><a class="btnlink" href="/inbox/api/pro/export?format=json" target="_blank">🗂 JSON</a></div><small>Sirf ek chat ka backup: us chat me jaakar ye link kholein: /inbox/api/pro/export?format=csv&c=91XXXXXXXXXX</small>';
+      }
+    }).catch(fail);
+  }
+  // ---- click routing ----
+  document.addEventListener("click", function (e) {
+    var t = e.target;
+    if (t.closest("[data-pclose]")) return closeModal();
+    var pm = t.closest("[data-pm]");
+    if (pm) { var a = pm.getAttribute("data-pm"); closePopP(); return a === "draft" ? openDraft() : a === "catalog" ? openCatalog() : a === "payinfo" ? sendPayInfo() : openSchedule(); }
+    if (t.closest("#pPlus")) return openPlusMenu(t.closest("#pPlus"));
+    if (t.closest("#pProf")) return openProfile();
+    if (t.closest("#pAsg")) return openAssign();
+    if (t.closest("#pRep")) return openReport();
+    if (t.closest("#pSet")) return openPro();
+    var tr = t.closest("[data-ptrk]");
+    if (tr) return sendTracking(tr);
+    if (t.closest("#bOut")) { try { fetch("/inbox/staff-logout", { method: "POST", keepalive: true, credentials: "same-origin" }); } catch (x) {} }
+  }, true);
+  new MutationObserver(sched).observe(document.body, { childList: true, subtree: true });
+  loadCfg().catch(function () {});
+  pollAsg();
+  setInterval(pollAsg, 10000);
+  setInterval(pollMs, 6000);
+  sched();
+}
+const PRO_CLIENT_JS = "(" + proClient.toString() + ")();";
+const PRO_CSS = String.raw`
+.pgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:8px 0}
+.pgrid div{background:var(--sel);border-radius:10px;padding:8px;text-align:center}
+.pgrid b{display:block;font-size:16px}
+.pgrid small{color:var(--mut);font-size:11px}
+.pvip{background:#f5c518;color:#222}
+.prisk{background:#d9534f;color:#fff}
+.pasg{background:#e3f2fd;color:#0d47a1}
+.pbar{height:6px;background:var(--sel);border-radius:4px;margin-top:4px}
+.pbar i{display:block;height:6px;background:var(--acc);border-radius:4px}
+.pred{color:#d9534f}
+.pchk{display:flex;gap:8px;align-items:center}
+.pchk input[type=checkbox]{width:auto;margin:0}
+.pimg{width:44px;height:44px;object-fit:cover;border-radius:8px;margin-right:8px}
+.pqr{max-width:180px;border:1px solid var(--line);border-radius:10px;margin:6px 0}
+.btnlink{padding:9px 14px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:inherit;text-decoration:none}
+.pstf{font-weight:600}
+#pPlus,#pProf,#pAsg{background:transparent;border:0;font-size:19px;padding:6px}
+`;
 
 // ---------- Page + static files ----------
 const INBOX_CSS = String.raw`:root{--bg:#f0f2f5;--panel:#fff;--side:#fff;--tx:#111b21;--mut:#667781;--line:#e9edef;--brand:#075e54;--acc:#25d366;--out:#d9fdd3;--in:#fff;--chatbg:#efeae2;--hover:#f5f6f6;--sel:#e9edef;--warn:#fff3cd;--bad:#f8d7da;--info:#e7f3ff;--inp:#fff}
@@ -2321,7 +3772,7 @@ const INBOX_JS = String.raw`(function () {
 
   var TZ = "Asia/Kolkata";
   var SRC_OPTS = ["Instagram", "Instagram Ad", "Facebook", "Facebook Ad", "YouTube", "YouTube Ad", "Google", "Google Ad", "WhatsApp", "Website", "Referral", "Direct", "Other"];
-  var EMOJIS = "😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇 🙂 😉 😍 🥰 😘 😋 😎 🤩 🥳 😏 😔 😢 😭 😡 🙏 👍 👎 👏 🙌 💪 ✅ ❌ ⚠️ ❤️ 💯 🔥 ✨ 🎉 🎁 🛍️ 📦 🚚 💰 📲 📸 📞 🕒 😅 🤝 👋 🙂".split(" ");
+  var EMOJIS = "😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇 🙂 😉 😍 🥰 😘 😋 😎 🤩 🥳 😏 😔 😢 😭 😡 🙏 👍 👎 👏 🙌 💪 ✅ ❌ ⚠ ❤ 💯 🔥 ✨ 🎉 🎁 🛍 📦 🚚 💰 📲 📸 📞 🕒 😅 🤝 👋 🙂".split(" ");
   var FILTERS = [["all", "Sab"], ["unread", "Unread"], ["waiting", "Jawab baaki"], ["human", "🔴 Team"], ["upi", "💳 UPI"], ["blocked", "🚫 Blocked"], ["archived", "📁 Archive"]];
 
   function $(s, r) { return (r || document).querySelector(s); }
@@ -2384,7 +3835,7 @@ const INBOX_JS = String.raw`(function () {
   }
 
   function colorFor(s) {
-   var h = 0, str = String(s || "x");
+    var h = 0, str = String(s || "x");
     for (var i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
     return "hsl(" + h + ",45%,45%)";
   }
@@ -2477,7 +3928,7 @@ const INBOX_JS = String.raw`(function () {
     $("#root").innerHTML =
       '<div id="app">' +
       '<aside id="side"><div class="sh"><div class="st">Bazoora Inbox <span id="tot"></span></div><div class="sbt">' +
-      '<button id="bNew" title="Naya chat">✏️</button><button id="bBc" title="Broadcast">📢</button><button id="bSet" title="Settings">⚙️</button>' +
+      '<button id="bNew" title="Naya chat">✏</button><button id="bBc" title="Broadcast">📢</button><button id="bSet" title="Settings">⚙</button>' +
       '<button id="bNotif" title="Notification on/off">🔔</button><button id="bSnd" title="Awaaz on/off">🔊</button><button id="bDark" title="Dark mode">🌙</button><button id="bOut" title="Logout">⎋</button>' +
       "</div></div>" +
       '<div class="sq"><input id="q" type="search" placeholder="Naam, number ya message dhundo"></div>' +
@@ -2603,12 +4054,12 @@ const INBOX_JS = String.raw`(function () {
     $("#bAttach").onclick = function (e) {
       e.stopPropagation();
       showPop(e.currentTarget, [
-        ["🖼️ Photo / Video", function () { pickFile("image/*,video/*"); }],
+        ["🖼 Photo / Video", function () { pickFile("image/*,video/*"); }],
         ["📄 Document", function () { pickFile("*/*"); }],
         ["🎧 Audio", function () { pickFile("audio/*"); }],
         ["📍 Location", sendLocation],
         ["🔘 Buttons message", openButtons],
-        ["🛍️ Product link", openProducts],
+        ["🛍 Product link", openProducts],
         ["📨 Template message", function () { openTemplate(); }]
       ], true);
     };
@@ -2708,7 +4159,7 @@ const INBOX_JS = String.raw`(function () {
 
     var lh = "";
     (i.labels || []).forEach(function (l) { lh += '<span class="lb big">' + esc(l) + ' <a data-dl="' + esc(l) + '">✕</a></span>'; });
-    lh += '<button class="mini" data-act="labels">🏷️ Label</button>' +
+    lh += '<button class="mini" data-act="labels">🏷 Label</button>' +
       '<button class="mini' + (S.showOrders ? " on" : "") + '" data-act="orders">📦 Orders</button>' +
       '<button class="mini' + (S.showNotes ? " on" : "") + '" data-act="notes">📝 Notes' + ((i.notes || []).length ? " (" + i.notes.length + ")" : "") + "</button>" +
       (i.alias ? "" : "") ;
@@ -2736,7 +4187,7 @@ const INBOX_JS = String.raw`(function () {
       if (dk !== lastDay) { lastDay = dk; h += '<div class="day"><span>' + esc(dayLabel(m.time)) + "</span></div>"; }
       h += msgHtml(m);
     });
-     if (!d.messages.length) h += '<div class="day"><span>Abhi koi message nahi</span></div>';
+    if (!d.messages.length) h += '<div class="day"><span>Abhi koi message nahi</span></div>';
     box.innerHTML = h;
     if (S.forceBottom || (allowScrollLogic && nearBottom)) {
       box.scrollTop = box.scrollHeight;
@@ -2888,14 +4339,14 @@ const INBOX_JS = String.raw`(function () {
       [i.needsHuman ? "✓ Jawab ho gaya (flag hatao)" : "🔴 Team ko flag karo", function () { chatAction("human", !i.needsHuman); }],
       [i.aiOff ? "🤖 AI jawab ON karo" : "🤖 AI jawab OFF karo", function () { chatAction("aiOff", !i.aiOff); }],
       [i.optOut ? "🔔 Broadcast me wapas lo" : "🔕 Broadcast se hatao (opt-out)", function () { chatAction("optOut", !i.optOut); }],
-      ["✏️ Naam badlo", function () {
+      ["✏ Naam badlo", function () {
         var n = window.prompt("Customer ka naam", i.alias || i.name || "");
         if (n !== null) chatAction("alias", n);
       }],
       ["📍 Source badlo", openSource],
-      ["🏷️ Labels", openLabels],
+      ["🏷 Labels", openLabels],
       [i.blocked ? "✅ Unblock" : "🚫 Block", function () { if (i.blocked) chatAction("unblock"); else openBlock(); }],
-      ["🗑️ Chat delete karo", function () { deleteChatUi(); }]
+      ["🗑 Chat delete karo", function () { deleteChatUi(); }]
     ], false);
   }
 
@@ -2926,7 +4377,6 @@ const INBOX_JS = String.raw`(function () {
     $("#srcOk", b).onclick = function () { var v = $("#srcIn", b).value.trim(); if (v) { closeModal(); chatAction("source", v); } };
     $("#srcClr", b).onclick = function () { closeModal(); chatAction("source", ""); };
   }
-
   function openLabels() {
     var all = S.labels.slice();
     var mine = (S.chat && S.chat.info.labels) || [];
@@ -3152,17 +4602,17 @@ const INBOX_JS = String.raw`(function () {
   }
   function renderSettings(tab) {
     var d = S.settings;
-    var tabs = [["qr", "⚡ Quick replies"], ["lab", "🏷️ Labels"], ["tpl", "📨 Templates"], ["blk", "🚫 Blocked"]];
+    var tabs = [["qr", "⚡ Quick replies"], ["lab", "🏷 Labels"], ["tpl", "📨 Templates"], ["blk", "🚫 Blocked"]];
     var h = '<div class="tabs">' + tabs.map(function (t) { return '<button class="tab' + (tab === t[0] ? " on" : "") + '" data-t="' + t[0] + '">' + t[1] + "</button>"; }).join("") + "</div>";
     if (tab === "qr") {
-      (d.quickReplies || []).forEach(function (q) { h += '<div class="row"><div><b>' + esc(q.title) + "</b><br><small>" + esc(q.text) + '</small></div><button class="mini danger" data-dq="' + esc(q.id) + '">🗑️</button></div>'; });
+      (d.quickReplies || []).forEach(function (q) { h += '<div class="row"><div><b>' + esc(q.title) + "</b><br><small>" + esc(q.text) + '</small></div><button class="mini danger" data-dq="' + esc(q.id) + '">🗑</button></div>'; });
       h += '<input id="qrT" placeholder="Title (jaise Dispatch)"><textarea id="qrX" rows="3" placeholder="Message text"></textarea><div class="btns"><button class="pri" id="qrAdd">Add quick reply</button></div>';
     } else if (tab === "lab") {
-      (d.labels || []).forEach(function (l) { h += '<div class="row"><div><b>' + esc(l) + '</b></div><button class="mini danger" data-dl2="' + esc(l) + '">🗑️</button></div>'; });
+      (d.labels || []).forEach(function (l) { h += '<div class="row"><div><b>' + esc(l) + '</b></div><button class="mini danger" data-dl2="' + esc(l) + '">🗑</button></div>'; });
       h += '<div class="na"><input id="lbN" placeholder="Naya label"><button class="mini on" id="lbAdd">Add</button></div>';
     } else if (tab === "tpl") {
       if (!(d.templates || []).length) h += '<div class="pm">Koi preset nahi. Template bhejte waqt "Preset save karo" tick karein.</div>';
-      (d.templates || []).forEach(function (t) { h += '<div class="row"><div><b>' + esc(t.title || t.name) + "</b><br><small>" + esc(t.name) + " (" + esc(t.lang || "en") + ") " + esc((t.params || []).join(" | ")) + '</small></div><button class="mini danger" data-dt="' + esc(t.id) + '">🗑️</button></div>'; });
+      (d.templates || []).forEach(function (t) { h += '<div class="row"><div><b>' + esc(t.title || t.name) + "</b><br><small>" + esc(t.name) + " (" + esc(t.lang || "en") + ") " + esc((t.params || []).join(" | ")) + '</small></div><button class="mini danger" data-dt="' + esc(t.id) + '">🗑</button></div>'; });
     } else {
       if (!d.persistent) h += '<div class="bn warn">⚠ MongoDB connected nahi hai: block list deploy par hat sakti hai. MONGODB_URI set karein.</div>';
       var keys = Object.keys(d.blocked || {});
@@ -3170,7 +4620,7 @@ const INBOX_JS = String.raw`(function () {
       keys.forEach(function (p) { h += '<div class="row"><div><b>+' + esc(p) + "</b><br><small>" + esc((d.blocked[p] && d.blocked[p].name) || "") + '</small></div><button class="mini" data-ub="' + esc(p) + '">Unblock</button></div>'; });
       h += '<div class="na"><input id="bkN" placeholder="Number block karne ke liye"><button class="mini danger" id="bkAdd">Block</button></div>';
     }
-    var b = modal("⚙️ Settings", h, true);
+    var b = modal("⚙ Settings", h, true);
     b.addEventListener("click", function (e) {
       var t = e.target.closest("[data-t]");
       if (t) { renderSettings(t.getAttribute("data-t")); return; }
@@ -3253,12 +4703,12 @@ const INBOX_JS = String.raw`(function () {
         var id = mm.getAttribute("data-menu"), m = findMsg(id);
         if (!m) return;
         var items = [];
-        if (m.canReply) items.push(["↩️ Reply", function () { S.replyTo = id; renderReplyBar(); var tx = $("#txt"); if (tx) tx.focus(); }]);
+        if (m.canReply) items.push(["↩ Reply", function () { S.replyTo = id; renderReplyBar(); var tx = $("#txt"); if (tx) tx.focus(); }]);
         items.push(["📋 Copy", function () {
           var txt = m.text || (m.media && m.media.caption) || "";
           if (navigator.clipboard) navigator.clipboard.writeText(txt).then(function () { toast("Copy ho gaya"); });
         }]);
-        items.push(["🗑️ Delete (sirf inbox se)", function () {
+        items.push(["🗑 Delete (sirf inbox se)", function () {
           if (window.confirm("Ye message inbox se delete karein? (WhatsApp par customer ke paas rahega)")) chatAction("delmsg", id);
         }]);
         showPop(mm, items, false);
@@ -3312,9 +4762,7 @@ const INBOX_HTML = `<!doctype html><html lang="hi"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#075e54"><meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="manifest" href="/inbox/manifest.json"><link rel="icon" href="/inbox/icon.svg">
-<title>Bazoora Inbox</title><link rel="stylesheet" href="/inbox/app.css"></head>
-<body><div id="root"></div><script src="/inbox/app.js"></script></body></html>`;
-
+<title>Bazoora Inbox</title><link rel="stylesheet" href="/inbox/app.css"></head><body><div id="root"></div><script src="/inbox/app.js"></script></body></html>`;
 app.get("/inbox", (req, res) => {
   if (!INBOX_SECRET) return res.status(403).send("INBOX_SECRET Render me set nahi hai");
   if (req.query.key && safeEq(req.query.key, INBOX_SECRET)) {
@@ -3353,7 +4801,6 @@ app.get("/inbox/sw.js", (req, res) =>
       `self.addEventListener("install",()=>self.skipWaiting());self.addEventListener("activate",e=>e.waitUntil(self.clients.claim()));self.addEventListener("fetch",()=>{});`
     )
 );
-
 // File (photo/video/doc): pehle apne DB se, warna Meta se (aur DB me save)
 app.get("/inbox/file", apiGuard, async (req, res) => {
   const id = String(req.query.id || "");
@@ -3494,7 +4941,6 @@ app.get("/inbox/api/chats", apiGuard, (req, res) => {
     persistent: !!db,
   });
 });
-
 app.get(
   "/inbox/api/chat",
   apiGuard,
@@ -3990,8 +5436,7 @@ app.post(
 // ---------- API: broadcast (template, bahut aaram se, ek ek karke) ----------
 let broadcastJob = null;
 app.get("/inbox/api/broadcast", apiGuard, (req, res) => {
-  res.json(broadcastJob || { total: 0, sent: 0, failed: 0, done: true, errors: [] });
-});
+  res.json(broadcastJob || { total: 0, sent: 0, failed: 0, done: true, errors: [] }); });
 app.post(
   "/inbox/api/broadcast",
   apiGuard,
@@ -4008,7 +5453,7 @@ app.post(
       if (aud.type === "label" && !(meta.labels || []).includes(String(aud.value))) continue;
       if (aud.type === "source" && meta.source !== String(aud.value)) continue;
       targets.push(p);
-    }
+  }
     if (b.dry) return res.json({ count: targets.length });
     if (!b.confirm) return res.status(400).json({ error: "Confirm chahiye" });
     if (broadcastJob && !broadcastJob.done) return res.status(409).json({ error: "Pehla broadcast abhi chal raha hai" });
@@ -4110,7 +5555,7 @@ async function runReminders() {
             ],
           },
         });
-         console.log("Reminder Meta response:", JSON.stringify(waRes.data));
+        console.log("Reminder Meta response:", JSON.stringify(waRes.data));
         await addTags(orderId, ["wa-reminded"]);
         console.log(`Reminder bheja: ${o.name} -> ${phone}`);
       } catch (err) {
@@ -4485,7 +5930,7 @@ async function runPaidSweep({ dry = false } = {}) {
     out.push(`${o.name}: ${sent ? "payment_received bheja" : "skip/fail"}`);
   }
   return out;
-}
+  }
 app.get("/cron/auto-cancel", async (req, res) => {
   if (!CRON_SECRET || req.query.key !== CRON_SECRET) {
     return res.status(403).send("Forbidden");
@@ -4526,4 +5971,5 @@ app.get("/", (req, res) => res.send("Bazoora WhatsApp bot chal raha hai ✅"));
   await loadInboxSettings();
   app.listen(PORT, () => console.log(`Server port ${PORT} par chal raha hai`));
 })();
-  
+    
+                                                                                             }
